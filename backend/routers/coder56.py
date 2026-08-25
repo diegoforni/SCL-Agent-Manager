@@ -5024,6 +5024,20 @@ def _merge_confirmed_findings_into_engagement(engagement_id: str, run_id: str) -
     # already sets verified only on CONFIRMED/ok_to_report==YES, but we re-check so
     # a future change to that helper cannot leak refuted/inconclusive records in).
     candidates = [f for f in candidates if f.get("verified") is True]
+    # f6182182 "2/9" defect: recon-level misconfigurations (the agent's M-NNN
+    # table in final_report.md) never pass the verifier gate, so they were
+    # silently dropped here and the client deliverable under-reported. Append
+    # them with HONEST provenance (verified=false, severity capped at LOW by
+    # _extract_recon_findings); _dedup_key keeps re-runs idempotent.
+    try:
+        recon = _extract_recon_findings(run_id)
+    except Exception as exc:
+        logger.warning("merge_confirmed_findings[%s] recon extract failed: %s", run_id, exc)
+        recon = []
+    if recon:
+        logger.info("merge_confirmed_findings[%s] adding %d recon-level finding(s)",
+                    run_id, len(recon))
+    candidates = candidates + recon
     if not candidates:
         return 0
 
@@ -5078,7 +5092,9 @@ def _merge_confirmed_findings_into_engagement(engagement_id: str, run_id: str) -
             "recommendation": str(cand.get("recommendation") or ""),
             "status": str(cand.get("status") or "open"),
             "discovered_via_run_id": run_id,
-            "verified": True,
+            # Verifier-CONFIRMED candidates carry verified=True from the
+            # extractor; recon-level candidates honestly carry False.
+            "verified": bool(cand.get("verified")),
             "verifier_verdict": str(cand.get("verifier_verdict") or "")[:500],
             # 8c2f1a postmortem defect: persist the candidate's explicit CWE tag.
             # Without it the stored finding re-infers its CWE from prose on the
@@ -5788,6 +5804,106 @@ def _verifier_verdict_for(run_id: str, endpoint: str, title: str) -> tuple:
     return False, ""
 
 
+# =============================================================================
+# Recon-level findings (the f6182182 "2/9" defect): the agent's final report
+# carries a markdown table of security misconfigurations (M-001..M-NNN) that
+# never went through the verifier gate — and both the engagement merge
+# (_merge_confirmed_findings_into_engagement, verified-only) and the phase-report
+# parser (_RE_PHASE_FINDING_HEAD, F#/D# headers only) drop them, so real
+# recon-level issues never reach the client deliverable. The extractor below
+# parses that table (and the same shape in MEMORY.md recon ledgers) so recon
+# findings flow into the engagement with HONEST provenance: verified=false,
+# severity from the table, severity capped at LOW (recon-level by construction —
+# if it were exploitable it would have been verifier-gated).
+# =============================================================================
+
+# | M-001 | Title text with (anything) | CWE-693 | LOW |
+_RE_RECON_ROW = re.compile(
+    r"^\s*\|\s*([A-Z]{1,3}-\d{1,3})\s*\|\s*([^|]+?)\s*\|\s*(CWE-\d+)[^|]*\|\s*"
+    r"(CRITICAL|HIGH|MEDIUM|LOW|INFO)\s*\|?\s*$", re.I)
+_RE_RECON_SECTION = re.compile(
+    r"misconfiguration|recon[- ]level|security\s+issue|recon\s+issue", re.I)
+
+# Numeric severity the merge/draft paths already use (mirrors _severity_for caps)
+_RECON_SEV_CAP = {"critical": "low", "high": "low", "medium": "low",
+                  "low": "low", "info": "info"}
+
+
+def _parse_recon_table(text: str) -> List[Dict[str, str]]:
+    """Yield {id,title,cwe,severity} rows from a markdown recon/misconfig table
+    inside `text`. Only rows under (or immediately after) a section heading that
+    smells like 'Security Misconfigurations (Recon-Level)' — never from arbitrary
+    tables (coverage matrices, phase checklists) elsewhere in the report."""
+    rows: List[Dict[str, str]] = []
+    in_section = False
+    gap_since_heading = 0
+    for ln in (text or "").splitlines():
+        if ln.lstrip().startswith("#"):
+            in_section = bool(_RE_RECON_SECTION.search(ln))
+            gap_since_heading = 0
+            continue
+        m = _RE_RECON_ROW.match(ln)
+        if in_section and m:
+            rows.append({"id": m.group(1).upper(),
+                         "title": m.group(2).strip().strip("`*"),
+                         "cwe": m.group(3).upper(),
+                         "severity": m.group(4).upper()})
+            gap_since_heading = 0
+        elif in_section and ln.strip() and not ln.lstrip().startswith("|"):
+            # Left the table for prose: a single prose line closes the section
+            # (markdown tables don't interleave with paragraphs; anything after
+            # is a different table and must not ride along).
+            in_section = False
+    return rows
+
+
+def _extract_recon_findings(run_id: str) -> List[Dict[str, Any]]:
+    """FindingCreate-shaped recon-level findings from the run's final_report.md
+    (authoritative) and memory/MEMORY.md (fallback when the report wasn't
+    written). All rows land as verified=false — the verifier never saw them —
+    and severity is capped at LOW so recon rows can never outrank a
+    verifier-CONFIRMED finding. Evidence cites the source file + line so the
+    client can audit the provenance."""
+    run_dir = OUTPUTS_DIR / run_id
+    out: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    for src_name in ("final_report.md", "memory/MEMORY.md"):
+        src = run_dir / src_name
+        if not src.exists():
+            continue
+        try:
+            text = src.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        src_label = "final report" if src_name.startswith("final") else "agent memory ledger"
+        for row in _parse_recon_table(text):
+            if row["id"] in seen_ids:
+                continue
+            seen_ids.add(row["id"])
+            sev = _RECON_SEV_CAP.get(row["severity"].lower(), "low")
+            title_txt = f"{row['id']}: {row['title']}"
+            out.append({
+                "run_id": run_id,
+                "title": title_txt[:200],
+                "severity": sev,
+                "cvss": None,
+                "affected_asset": "",
+                "description": f"{row['title']} (recon-level security misconfiguration, {row['cwe']}).",
+                "impact": "",
+                "evidence": f"Recorded as {row['id']} ({row['cwe']}, severity {row['severity']} per the agent's own {src_label}) in /outputs/{run_id}/{src_name}. Recon-level: established during enumeration, not verifier-gated.",
+                "recommendation": "",
+                "status": "open",
+                "verified": False,
+                "verifier_verdict": "",
+                "commands": [],
+                "cwe_hint": row["cwe"].lower(),
+            })
+        if out:
+            # final_report.md is authoritative — stop once it yielded rows.
+            break
+    return out
+
+
 def _extract_findings_from_phase_reports(run_id: str) -> List[Dict[str, Any]]:
     """Parse the real findings out of the phase reports (run.json ->
     phase_runtime[].result). Returns FindingCreate-shaped dicts. Authoritative
@@ -6168,7 +6284,16 @@ def _dedup_key(f: Dict[str, Any]) -> str:
     group_by SQLi — separate; it is empty whenever no parameter is derivable, so
     parameter-less restatements of one finding still merge as before.
 
-    Falls back to a normalized title only when no endpoint path is derivable."""
+    Falls back to a normalized title only when no endpoint path is derivable.
+
+    RECON ROWS are keyed on their stable M-NNN id (up front): the extractor
+    titles carry the report's backticks/spacing verbatim while an operator or
+    manual backfill may phrase the same row differently, and without the id key
+    every harvest re-appends a near-duplicate (observed live on 5139ebbf3fe7
+    after the first patched restart: 6/7 rows duplicated)."""
+    m_id = re.match(r"^([A-Z]{1,3}-\d{1,3}):\s", str(f.get("title") or ""))
+    if m_id:
+        return f"recon|{m_id.group(1).upper()}"
     blob = f"{f.get('title') or f.get('title_raw') or ''} {f.get('affected_asset', '')} {f.get('description', '')}"
     mm = _RE_METHOD.search(blob)
     method = mm.group(1).upper() if mm else ""
@@ -6423,7 +6548,8 @@ def _draft_findings_inprocess(engagement: Dict[str, Any],
             logger.warning("retract_contradicted[%s] failed: %s", rid, exc)
         by_key: Dict[str, Dict[str, Any]] = {}
         # Verifier (first) wins the within-run merge as `base`.
-        for finds in (_extract_verifier_findings(rid), _extract_emission_findings(rid)):
+        for finds in (_extract_verifier_findings(rid), _extract_emission_findings(rid),
+                      _extract_recon_findings(rid)):
             for f in finds:
                 f = dict(f)
                 f["run_id"] = rid
