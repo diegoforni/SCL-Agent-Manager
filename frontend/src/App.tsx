@@ -1,10 +1,8 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from './components/Layout';
-import { DashboardPage } from './pages/DashboardPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { TopologyPage } from './pages/TopologyPage';
-import { HostDiscoveryPage } from './pages/HostDiscoveryPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { DefenderPage } from './pages/DefenderPage';
 import { ReplayPage } from './pages/ReplayPage';
@@ -15,10 +13,9 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
-          <Route path="/" element={<DashboardPage />} />
+          <Route path="/" element={<Navigate to="/agents" replace />} />
           <Route path="/agents" element={<AgentsPage />} />
           <Route path="/topology" element={<TopologyPage />} />
-          <Route path="/discovery" element={<HostDiscoveryPage />} />
           <Route path="/defender" element={<DefenderPage />} />
           <Route path="/replay" element={<ReplayPage />} />
           <Route path="/settings" element={<SettingsPage />} />

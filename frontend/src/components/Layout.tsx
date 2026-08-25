@@ -4,9 +4,7 @@ import {
   Settings,
   Sun,
   Moon,
-  LayoutDashboard,
   Network,
-  Search,
   Shield,
   Play,
   Pause,
@@ -19,10 +17,8 @@ import { ReplayProvider, useReplayContext } from '@/contexts/ReplayContext';
 import { useState, useEffect, useCallback } from 'react';
 
 const navItems = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/agents', icon: Bot, label: 'Agent Execution' },
   { to: '/topology', icon: Network, label: 'Topologies' },
-  { to: '/discovery', icon: Search, label: 'Host Discovery' },
   { to: '/defender', icon: Shield, label: 'Defender' },
   { to: '/replay', icon: Play, label: 'Replay' },
   { to: '/settings', icon: Settings, label: 'Settings' },
