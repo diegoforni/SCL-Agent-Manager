@@ -3450,6 +3450,16 @@ async def _lead_driver(run_id: str) -> None:
                         if status and status not in ("completed", "error"):
                             pending_tool = True
                         if p.get("tool") in ("task", "Task"):
+                            # A spawn that ERRORED (schema/launch failure) never ran
+                            # a phase — it must NOT consume a phase slot. Without
+                            # this, a model that retries a malformed task call N
+                            # times (qwen3.8-27b omitted the required `prompt` key
+                            # 8x) index-shifts every later task past the runtime
+                            # list: phantom phases "running", and the one REAL
+                            # spawn lands beyond len(phases) where its results are
+                            # never harvested (run fa816e74).
+                            if status == "error":
+                                continue
                             parsed = _parse_lead_task(st)
                             if parsed:
                                 tasks.append((parsed, status))
@@ -4213,7 +4223,7 @@ class LLMCallError(RuntimeError):
     instead of silently degrading to an empty result."""
 
 
-async def _llm_chat(user_msg: str, system_msg: str, max_tokens: int = 8192,
+async def _llm_chat(user_msg: str, system_msg: str, max_tokens: int = 16384,
                     timeout: float = LLM_CHAT_TIMEOUT_S, max_attempts: int = 2,
                     raise_on_fail: bool = False) -> Optional[str]:
     """Call the configured OpenAI-compatible LLM (same provider the agents use).
@@ -4222,6 +4232,13 @@ async def _llm_chat(user_msg: str, system_msg: str, max_tokens: int = 8192,
     /goal/draft fall back to a template). Pass raise_on_fail=True to instead
     raise LLMCallError with the reason — used by the findings draft, which must
     NOT silently drop a result when the model can't handle the full transcript.
+
+    max_tokens defaults to 16384 because glm-5.2 is a THINKING model: its
+    reasoning_tokens count against the SAME completion budget as the visible
+    JSON (a measured goal-draft spent 9.2k tokens reasoning before ~3.1k of
+    text). At the old 8192 cap every large draft was truncated mid-JSON
+    (finish_reason=length) and silently degraded to the "not parseable JSON"
+    template — the GoalBuilder then appeared to do nothing.
 
     Read timeouts are NEVER retried: a timeout on a large prompt means the model
     can't process the volume in time, and retrying just doubles the wait before
@@ -4275,6 +4292,16 @@ async def _llm_chat(user_msg: str, system_msg: str, max_tokens: int = 8192,
                 logger.info("LLM returned non-JSON (attempt %d): %s", attempt, resp.text[:200])
                 return _fail("LLM returned a non-JSON response")
             choices = data.get("choices") or []
+            if choices and choices[0].get("finish_reason") == "length":
+                # Truncated mid-output — for thinking models (glm-5.2) reasoning
+                # shares the completion budget, so this means the visible text
+                # (often strict JSON) got cut and WILL fail loose parsing.
+                usage = data.get("usage") or {}
+                logger.warning(
+                    "LLM completion truncated (finish_reason=length, max_tokens=%d, "
+                    "completion_tokens=%s) — output will likely fail JSON parsing",
+                    max_tokens, usage.get("completion_tokens"),
+                )
             return (choices[0].get("message", {}).get("content", "") if choices else "") or None
 
         # Transient (esp. 429 max_parallel_requests) -> back off and retry.
