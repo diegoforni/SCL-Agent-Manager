@@ -3416,6 +3416,7 @@ async def _lead_driver(run_id: str) -> None:
     gated_through = -1  # highest phase index already gated to awaiting_review
     auto_resumed_after = -1  # completion count already nudged in this driver
     phase0_nudged = False  # one-shot: Phase-0 THREAT_MODEL| nudge already sent
+    corrected_for = -1  # phase index already given a corrective task payload
     last_snapshot = time.time()  # mid-run transcript snapshot cadence
 
     while True:
@@ -3601,6 +3602,67 @@ async def _lead_driver(run_id: str) -> None:
                     last_progress = time.time()
                 except Exception as exc:
                     logger.warning("lead_driver[%s] phase0 nudge failed: %s", run_id, exc)
+
+            # qwen3.8 corrective injection (one-shot per phase): the lead repeatedly
+            # emits task calls missing the required `prompt` key and narrates the
+            # fix without applying it (run 883ea6af: 7+ consecutive SchemaErrors,
+            # zero spawns). Hand it the EXACT ready-to-use JSON built from the real
+            # phase objective so it only echoes, never composes.
+            err_parts = sum(
+                1
+                for m in msgs
+                for p in (m.get("parts") or [])
+                if isinstance(p, dict)
+                and p.get("type") == "tool"
+                and p.get("tool") in ("task", "Task")
+                and (p.get("state") or {}).get("status") == "error"
+            )
+            next_idx = min(n_completed, len(phases) - 1)
+            if (
+                err_parts >= 3
+                and corrected_for != next_idx
+                and not any(st == "running" for _, st in tasks)
+            ):
+                corrected_for = next_idx
+                _obj = str(
+                    phases[next_idx].get("objective")
+                    or phases[next_idx].get("title")
+                    or "execute this phase's objective"
+                )[:500]
+                _m = re.search(
+                    r"AUTHORIZED SCOPE[^:\n]*:\s*\n(.+?)(?:\n\s*\n|\n[A-Z])",
+                    meta.get("directive", ""),
+                    re.S,
+                )
+                _scope = (_m.group(1).strip().splitlines()[0] if _m else "per the engagement directive")
+                _payload = {
+                    "description": f"Phase {next_idx}",
+                    "prompt": (
+                        f"OBJECTIVE: {_obj}\n"
+                        f"AUTHORIZED SCOPE: {_scope}\n"
+                        f"prior findings: read /outputs/{run_id}/memory/MEMORY.md"
+                    ),
+                    "subagent_type": "coder56_phase",
+                }
+                try:
+                    await send_prompt_async(
+                        session_id=lead_sess,
+                        host=addr,
+                        port=4096,
+                        agent="coder56_lead",
+                        async_mode=True,
+                        timeout=30,
+                        prompt=(
+                            f"Your last {err_parts} task calls were rejected: you keep omitting the required "
+                            "`prompt` key while believing you included it. Stop composing the JSON yourself. "
+                            "Call the task tool NOW with EXACTLY this payload (copy it verbatim, all three keys):\n"
+                            + json.dumps(_payload, ensure_ascii=False)
+                            + "\nSend it as-is; do not shorten, rename, or reorder keys."
+                        ),
+                    )
+                    last_progress = time.time()
+                except Exception as exc:
+                    logger.warning("lead_driver[%s] corrective injection failed: %s", run_id, exc)
 
             now = time.time()
             # Periodic mid-run transcript snapshot: the exit snapshot at driver
