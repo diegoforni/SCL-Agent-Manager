@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # The topology plugin owns topology.json and serves it over HTTP.
 TOPOLOGY_PLUGIN_URL = os.environ.get(
-    'TOPOLOGY_PLUGIN_URL', 'http://scl-network-topology:9002'
+    'TOPOLOGY_PLUGIN_URL', 'http://scl-plugin-network-topology-control-plane:9002'
 ).rstrip('/')
 
 # HTTP timeout for plugin calls (local network; keep short).

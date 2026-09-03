@@ -753,7 +753,7 @@ async def health_check() -> HealthResponse:
     """
     return HealthResponse(
         status="healthy",
-        version="1.0.1",
+        version="1.0.2",
         supported_agents=[agent.value for agent in list_supported_agents()]
     )
 

@@ -16,7 +16,9 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 # Configuration — resolved via env vars set in docker-compose.yml
-TOPOLOGY_PLUGIN_URL = os.getenv("TOPOLOGY_PLUGIN_URL", "http://scl-network-topology:9002")
+TOPOLOGY_PLUGIN_URL = os.getenv(
+    "TOPOLOGY_PLUGIN_URL", "http://scl-plugin-network-topology-control-plane:9002"
+)
 TOPOLOGIES_DIR = Path(os.getenv("TOPOLOGIES_DIR", "/app/topologies"))
 
 logger = logging.getLogger(__name__)

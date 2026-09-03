@@ -13,7 +13,7 @@ services:
       # Read-write: the agent-manager's auto_responder writes soc_god logs + alerts here.
       - ${OUTPUTS_DIR:-/tmp/outputs}:/outputs:rw
     environment:
-      - TOPOLOGY_PLUGIN_URL=http://scl-network-topology:9002
+      - TOPOLOGY_PLUGIN_URL=http://scl-plugin-network-topology-control-plane:9002
       - SCL_NETWORK_NAME=playground-net
       - AGENT_MANAGER_CONTAINER_NAME=scl-agent-manager-dashboard
       - OPENCODE_PORT=4096

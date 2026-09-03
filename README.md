@@ -76,7 +76,7 @@ Environment variables (set in `docker-compose.yml`):
 | `AGENT_STATE_DIR` | `/app/state` | Path to agent state volume |
 | `DASHBOARD_PORT` | `8080` | Internal backend port |
 | `OUTPUTS_DIR` | `/outputs` | Trident/timeline output directory |
-| `TOPOLOGY_PLUGIN_URL` | `http://scl-network-topology:9002` | Network topology plugin URL |
+| `TOPOLOGY_PLUGIN_URL` | `http://scl-plugin-network-topology-control-plane:9002` | Network topology plugin URL |
 | `LOG_LEVEL` | `INFO` | Logging level |
 
 ### LLM Configuration

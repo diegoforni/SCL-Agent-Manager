@@ -319,7 +319,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Agent Manager API",
     description="REST API for managing agent assignments, containers, and sessions in StratocyberLab",
-    version="1.0.1",
+    version="1.0.2",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan
