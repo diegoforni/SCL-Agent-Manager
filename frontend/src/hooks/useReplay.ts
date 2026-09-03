@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { pluginRelativePath } from '@/plugin-url';
 
 /**
  * Hook for listing available replay runs.
@@ -15,7 +16,7 @@ export function useReplayRuns() {
   const fetchRuns = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/replay/runs');
+      const response = await fetch(pluginRelativePath('/api/replay/runs'));
       if (!response.ok) throw new Error('Failed to fetch runs');
       const data = await response.json();
       setRuns(data.runs || []);

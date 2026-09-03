@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { pluginWebSocketUrl } from '@/plugin-url';
 import type { TimelineEntry, ReplayEvent } from '@/types';
 import { getTimeline } from '@/api';
 import { useReplayContext } from '@/contexts/ReplayContext';
@@ -130,8 +131,7 @@ export function useTimelineStream(agent: string) {
   const connect = useCallback(() => {
     if (replay.replayId !== null) return;
 
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${window.location.host}/api/timeline/${agent}/ws`;
+    const url = pluginWebSocketUrl(`/api/timeline/${agent}/ws`);
     const ws = new WebSocket(url);
     wsRef.current = ws;
 

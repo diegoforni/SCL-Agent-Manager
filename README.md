@@ -50,7 +50,7 @@ Run all commands from the repository root.
 
 ### With Docker Compose (recommended)
 
-The Compose stack uses the external Docker network `scl-playground-net`, which is created by the network-topology plugin. Make sure that plugin is running first.
+The Compose stack uses the external Docker network `playground-net`, which is created by the base StratoCyberLab stack. Start the base stack before starting this plugin.
 
 ```bash
 # Set LLM environment variables (required for agent functionality)
@@ -58,10 +58,13 @@ export OPENCODE_API_KEY=your-api-key-here
 export LLM_URL=https://llm.ai.e-infra.cz/v1
 export LLM_MODEL=qwen3-coder
 # Start the services
-docker compose up -d --build
+docker compose -f plugins/agent-manager/docker-compose.yml up -d --build
 ```
 
 The dashboard is available at http://localhost:9005 (override the host port with `DASHBOARD_PORT`).
+The image contains the backend and bundled topologies, so its production Compose
+file does not bind-mount plugin source directories. This lets StratoCyberLab's
+dashboard start the plugin through Docker Desktop on macOS.
 
 ## Configuration
 

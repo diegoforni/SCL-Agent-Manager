@@ -33,7 +33,7 @@ async def _host_name(topology_id: str, host_id: str) -> str:
 async def _container_ips(docker: Any, container_id: str) -> List[str]:
     """All IPs of a container across every attached network.
 
-    A defended host sits on both its topology subnet and scl-playground-net;
+    A defended host sits on both its topology subnet and playground-net;
     SLIPS sees the topology-subnet IP while Docker's preferred IP is the
     playground-net one, so alert matching must consider ALL IPs.
     """

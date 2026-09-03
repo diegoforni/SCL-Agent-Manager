@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { AgentsPage } from './pages/AgentsPage';
 import { TopologyPage } from './pages/TopologyPage';
@@ -10,7 +10,7 @@ import './index.css';
 
 function App() {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Navigate to="/agents" replace />} />
@@ -21,7 +21,7 @@ function App() {
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Routes>
-    </BrowserRouter>
+    </HashRouter>
   );
 }
 

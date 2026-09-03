@@ -4,6 +4,9 @@ import path from 'path';
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Plugins are served below /plugins/<id>/ by the StratoCyberLab dashboard.
+  // Relative assets keep those requests inside the dashboard proxy.
+  base: './',
   plugins: [react()],
   resolve: {
     alias: {

@@ -42,7 +42,7 @@ OPENCODE_READY_TIMEOUT = 30  # seconds
 CONTAINER_RECREATE_TIMEOUT = 60  # seconds
 
 # SCL shared network name — must match the value in SCL's docker-compose.yml
-SCL_NETWORK_NAME = os.getenv("SCL_NETWORK_NAME", "scl-playground-net")
+SCL_NETWORK_NAME = os.getenv("SCL_NETWORK_NAME", "playground-net")
 
 # OpenCode configuration
 OPENCODE_PORT = int(os.getenv("OPENCODE_PORT", "4096"))

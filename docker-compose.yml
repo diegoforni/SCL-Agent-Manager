@@ -5,19 +5,16 @@ services:
       dockerfile: Dockerfile.dashboard
     container_name: scl-agent-manager-dashboard
     ports:
-      - "${DASHBOARD_PORT:-9005}:8080"
+      - "127.0.0.1:${DASHBOARD_PORT:-9005}:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - agent_state:/app/state
-      # Mount backend for development (optional, remove in production)
-      - ./backend:/app/backend
-      - ./topologies:/app/topologies
       # Mount outputs directory for Trident compatibility + Replay persistence.
       # Read-write: the agent-manager's auto_responder writes soc_god logs + alerts here.
       - ${OUTPUTS_DIR:-/tmp/outputs}:/outputs:rw
     environment:
       - TOPOLOGY_PLUGIN_URL=http://scl-network-topology:9002
-      - SCL_NETWORK_NAME=scl-playground-net
+      - SCL_NETWORK_NAME=playground-net
       - AGENT_MANAGER_CONTAINER_NAME=scl-agent-manager-dashboard
       - OPENCODE_PORT=4096
       - OPENCODE_IMAGE_CODER56=${OPENCODE_IMAGE_CODER56:-ghcr.io/stratocyber/opencode-coder56:latest}
@@ -33,14 +30,14 @@ services:
       - DEFENDER_LLM_API_KEY=${OPENCODE_API_KEY}
       - PLANNER_MODEL=${PLANNER_MODEL:-gpt-oss-120b}
     networks:
-      - scl-playground-net
+      - playground-net
     restart: unless-stopped
 
   # NVIDIA NEMOTRON proxy for opencode: de-streams nemotron responses and injects
   # the chat_template_kwargs / reasoning_budget NVIDIA requires (opencode 1.18.3's
   # openai-compatible provider can't send these itself). Forwards the client's
   # Authorization header to NVIDIA's upstream, so NO secret is baked into the
-  # image/compose. Reached by containers on scl-playground-net as
+  # image/compose. Reached by containers on playground-net as
   # http://scl-nvidia-proxy:8448/v1 (see backend/routers/settings.py PROVIDER_PRESETS).
   nvidia-proxy:
     build: ./nvidia-proxy
@@ -49,11 +46,12 @@ services:
     hostname: scl-nvidia-proxy
     restart: unless-stopped
     networks:
-      - scl-playground-net
+      - playground-net
 
 volumes:
   agent_state:
 
 networks:
-  scl-playground-net:
+  playground-net:
     external: true
+    name: playground-net

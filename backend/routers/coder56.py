@@ -999,7 +999,7 @@ async def _snapshot_opencode_db(run_id: str) -> None:
 # =============================================================================
 # Isolated sandbox (topology-free coder56)
 #
-# A single long-lived coder56 container on scl-playground-net, reused across
+# A single long-lived coder56 container on playground-net, reused across
 # launches — no topology plugin, no host selection. The ubuntu-24.04-opencode
 # image's entrypoint.sh starts the guardrail serve (127.0.0.1:4097) + executor
 # opencode serve (0.0.0.0:4096) + SSH, and copies the baked opencode.json (which
@@ -1011,7 +1011,7 @@ async def _snapshot_opencode_db(run_id: str) -> None:
 # =============================================================================
 
 SANDBOX_IMAGE = os.environ.get("CODER56_SANDBOX_IMAGE", "ubuntu-24.04-opencode:0.1")
-SANDBOX_NETWORK = os.environ.get("SCL_NETWORK_NAME", "scl-playground-net")
+SANDBOX_NETWORK = os.environ.get("SCL_NETWORK_NAME", "playground-net")
 
 
 def _sandbox_name() -> str:
@@ -1228,7 +1228,7 @@ async def _finalize_run(req: LaunchRequest, container_id: str, *, topology_id: s
     overwrite each other's state."""
     await _wait_opencode_ready(container_id)
     # Best-effort egress fix. Topology hosts route via a no-egress gw and need this;
-    # the sandbox on scl-playground-net already has NAT egress, so it's a no-op there.
+    # the sandbox on playground-net already has NAT egress, so it's a no-op there.
     await _fix_egress(container_id)
 
     run_id = _allocate_run_id(topology_id)

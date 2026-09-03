@@ -2,7 +2,7 @@
   "id": "agent-manager",
   "name": "Agent Manager",
   "description": "Manage OpenCode agents on running topology hosts with live monitoring dashboard",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "ui_url": "http://scl-agent-manager-dashboard:8080",
   "author": "StratoCyberLab",
   "api_endpoints": ["/api/agents", "/api/containers", "/api/sessions", "/api/reconcile"],

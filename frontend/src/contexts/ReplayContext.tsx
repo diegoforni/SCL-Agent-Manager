@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useRef, ReactNode } from 'react';
 import type { ReplayEvent, ReplayMetadata, ReplayState } from '@/types';
+import { pluginRelativePath, pluginWebSocketUrl } from '@/plugin-url';
 
 interface ReplayControls {
   loadReplay: (path: string, runId?: string) => Promise<void>;
@@ -52,7 +53,7 @@ export function ReplayProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      const response = await fetch('/api/replay/load', {
+      const response = await fetch(pluginRelativePath('/api/replay/load'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -83,8 +84,7 @@ export function ReplayProvider({ children }: { children: ReactNode }) {
       });
 
       // Connect to WebSocket for playback control
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${proto}//${window.location.host}/api/replay/${metadata.replay_id}/ws`;
+      const url = pluginWebSocketUrl(`/api/replay/${metadata.replay_id}/ws`);
 
       // Add timeout to detect if connection fails
       const connectionTimeout = setTimeout(() => {

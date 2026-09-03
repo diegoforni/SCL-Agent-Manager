@@ -15,6 +15,7 @@ import {
 import { ContainerStatusBar } from './ContainerStatusBar';
 import { ReplayProvider, useReplayContext } from '@/contexts/ReplayContext';
 import { useState, useEffect, useCallback } from 'react';
+import { pluginRelativePath } from '@/plugin-url';
 
 const navItems = [
   { to: '/agents', icon: Bot, label: 'Agent Execution' },
@@ -61,7 +62,7 @@ function ReplayControlBar() {
   const fetchRuns = async () => {
     setLoadingRuns(true);
     try {
-      const res = await fetch('/api/replay/runs');
+      const res = await fetch(pluginRelativePath('/api/replay/runs'));
       const data = await res.json();
       setRuns(data.runs || []);
     } catch (e) {

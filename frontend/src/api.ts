@@ -70,6 +70,7 @@ import type {
   PlannerHealth,
   PlannerPlanResponse,
 } from './types';
+import { pluginWebSocketUrl } from './plugin-url';
 
 // =============================================================================
 // Configuration
@@ -77,8 +78,7 @@ import type {
 
 // Use empty string so axios makes same-origin requests (works for any host).
 // Falls back to localhost:8000 only if the env var is truly absent (undefined).
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000';
-const WS_BASE_URL = import.meta.env.VITE_WS_BASE_URL ?? 'ws://localhost:8000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '.';
 
 // =============================================================================
 // Error Types
@@ -822,7 +822,7 @@ export class AgentWebSocket {
  * Create a WebSocket connection for events
  */
 export function createEventWebSocket(callbacks?: WebSocketCallbacks): AgentWebSocket {
-  const url = `${WS_BASE_URL}/ws/events`;
+  const url = pluginWebSocketUrl('/ws/events');
   return new AgentWebSocket(url, callbacks);
 }
 
@@ -833,7 +833,7 @@ export function createSessionWebSocket(
   sessionId: string,
   callbacks?: WebSocketCallbacks
 ): AgentWebSocket {
-  const url = `${WS_BASE_URL}/api/sessions/ws/${sessionId}`;
+  const url = pluginWebSocketUrl(`/api/sessions/ws/${sessionId}`);
   return new AgentWebSocket(url, callbacks);
 }
 
