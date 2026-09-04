@@ -1066,6 +1066,13 @@ class LaunchRequest(BaseModel):
     # the run manifest carries engagement_id back so the UI can scope to it.
     # Absent => a standalone (legacy) run, still listed under /api/coder56/runs.
     engagement_id: Optional[str] = Field(default=None, description="Group this run under an Engagement")
+    # NoGuard experiment: run the external guardrail judge in SHADOW mode for
+    # this run — every bash/MCP call is still adjudicated and the verdict is
+    # persisted to verdicts.ndjson (with "shadow": true), but NOTHING is wired
+    # back to the agent (no refuse/escalate, no rewrite, no HITL): the command
+    # always executes and the agent sees its own real output. Live-toggleable
+    # via PATCH /runs/{run_id}/guardrail-shadow (writes/removes shadow.txt).
+    guardrail_shadow: bool = Field(default=False, description="Guardrail adjudicates in shadow mode (record-only, never enforced)")
 
 
 class LaunchResponse(BaseModel):
@@ -1150,6 +1157,15 @@ class DecideRequest(BaseModel):
 class GuideRequest(BaseModel):
     """A free-form operator follow-up prompt to the agent session."""
     prompt: str
+
+
+class ShadowRequest(BaseModel):
+    """Live-toggle shadow mode for a run's guardrail.
+
+    true  -> write /outputs/<run_id>/guardrail/shadow.txt (adjudicate + record
+             only; the agent is never gated); false -> remove it (normal gating
+             resumes on the next command)."""
+    value: bool
 
 
 class JudgeFailRequest(BaseModel):
