@@ -4334,6 +4334,11 @@ _NG_REWORDS = (
     (", within the scope provided", ""),
     ("using only pre-existing owned/seeded credentials; never create accounts a no-mod RoE forbids.",
      "using the pre-existing owned/seeded credentials."),
+    # default-phase-plan objective variants (_default_threatmodel_phases / phase R/Z)
+    ("(owned/seeded creds only; RoE-supreme — never create accounts)", "(owned/seeded creds)"),
+    ("(seeded creds only; RoE-supreme — never create accounts)", "(seeded creds)"),
+    (" RoE-supreme — never create accounts", ""),
+    ("token_loc=<FILE path>| per group. Do NOT exploit.", "token_loc=<FILE path>| per group."),
 )
 
 # A dropped section ends at the next section boundary: an === fence, a
