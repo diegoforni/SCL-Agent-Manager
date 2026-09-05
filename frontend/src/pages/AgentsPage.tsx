@@ -32,9 +32,12 @@ function AgentPanel({
   // Sub-agent view (coder56): the lead session spawns coder56_phase /
   // coder56_verifier children that only exist inside opencode. `agents` is the
   // discovered tree; `followLatest` auto-tracks the most recently active agent
-  // until the operator pins one explicitly.
+  // until the operator pins one explicitly. Guardrail judge sessions are hidden
+  // behind a toggle — they update on every adjudicated command and would
+  // otherwise dominate the stream and the auto-follow.
   const [agents, setAgents] = useState<SessionAgentInfo[]>([]);
   const [pinnedAgentId, setPinnedAgentId] = useState<string | null>(null);
+  const [showGuardrail, setShowGuardrail] = useState(false);
   const isCoder56 = assignment.agent_type === 'coder56';
 
   const mySessions = useMemo(() => sessions.filter(s =>
@@ -83,17 +86,23 @@ function AgentPanel({
     };
   }, [activeSession?.session_id, isCoder56]);
 
+  const visibleAgents = useMemo(
+    () => agents.filter(a => a.kind !== 'guardrail' || showGuardrail),
+    [agents, showGuardrail]
+  );
+  const hasGuardrail = useMemo(() => agents.some(a => a.kind === 'guardrail'), [agents]);
+
   const latestAgentId = useMemo(() => {
-    if (!activeSession || agents.length === 0) return activeSession?.session_id ?? null;
-    const withTimes = agents.filter(a => typeof a.updated === 'number');
+    if (!activeSession || visibleAgents.length === 0) return activeSession?.session_id ?? null;
+    const withTimes = visibleAgents.filter(a => typeof a.updated === 'number');
     const newest = withTimes.reduce((acc, a) => (a.updated! > acc.updated! ? a : acc), withTimes[0]);
     return newest?.session_id ?? activeSession.session_id;
-  }, [agents, activeSession?.session_id]);
+  }, [visibleAgents, activeSession?.session_id]);
 
-  const selectedAgentId = pinnedAgentId && agents.some(a => a.session_id === pinnedAgentId)
+  const selectedAgentId = pinnedAgentId && visibleAgents.some(a => a.session_id === pinnedAgentId)
     ? pinnedAgentId
     : latestAgentId;
-  const selectedAgent = agents.find(a => a.session_id === selectedAgentId);
+  const selectedAgent = visibleAgents.find(a => a.session_id === selectedAgentId);
 
   // Poll only this panel's active session messages, scheduling the next poll
   // after the previous request finishes so slow requests never overlap.
@@ -231,10 +240,10 @@ function AgentPanel({
         </button>
       </div>
 
-      {/* Agent selector: lead + subagents + guardrail for coder56 runs */}
-      {isCoder56 && agents.length > 0 && (
+      {/* Agent selector: lead + subagents for coder56 runs; guardrail behind a toggle */}
+      {isCoder56 && visibleAgents.length > 0 && (
         <div className="mb-2 flex items-center gap-1 overflow-x-auto pb-1">
-          {agents.map(a => {
+          {visibleAgents.map(a => {
             const isActive = a.session_id === selectedAgentId;
             return (
               <button
@@ -258,6 +267,22 @@ function AgentPanel({
               className="flex-shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium border border-dashed border-trident-border/50 text-trident-muted hover:text-trident-text"
             >
               auto-follow latest
+            </button>
+          )}
+          {hasGuardrail && (
+            <button
+              onClick={() => setShowGuardrail(v => !v)}
+              title={showGuardrail
+                ? 'Hide the guardrail judge session(s)'
+                : 'Show the guardrail judge session(s) — they update on every adjudicated command'}
+              className={`flex-shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium border transition-colors flex items-center gap-1 ${
+                showGuardrail
+                  ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/50'
+                  : 'bg-trident-bg text-trident-muted border-trident-border/50 hover:text-trident-text'
+              }`}
+            >
+              <Shield size={11} />
+              guardrail {showGuardrail ? 'on' : 'off'}
             </button>
           )}
         </div>

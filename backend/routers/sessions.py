@@ -417,7 +417,7 @@ async def list_session_agents(session_id: str) -> Dict[str, Any]:
         frontier = next_frontier
         depth += 1
 
-    def _entry(sid: str, label: str, dep: int) -> Dict[str, Any]:
+    def _entry(sid: str, label: str, dep: int, kind: str = "agent") -> Dict[str, Any]:
         obj = objects.get(sid) or {}
         t = obj.get("time") or {}
         return {
@@ -426,6 +426,7 @@ async def list_session_agents(session_id: str) -> Dict[str, Any]:
             "title": str(obj.get("title") or ""),
             "parent_id": obj.get("parentID"),
             "depth": dep,
+            "kind": kind,
             "created": t.get("created"),
             "updated": t.get("updated"),
         }
@@ -433,21 +434,22 @@ async def list_session_agents(session_id: str) -> Dict[str, Any]:
     agents = [_entry(session_id, "coder56_lead", 0)] if session_id in objects else [
         # Root not yet visible via /session (created but never prompted).
         {"session_id": session_id, "label": "coder56_lead", "title": "",
-         "parent_id": None, "depth": 0, "created": None, "updated": None}
+         "parent_id": None, "depth": 0, "kind": "agent",
+         "created": None, "updated": None}
     ]
     for sid, dep in sorted(descendants.items(), key=lambda kv: _created(objects.get(kv[0]) or {})):
         agents.append(_entry(sid, _label_subagent(objects.get(sid) or {}, dep), dep))
 
     # The guardrail judge runs its own (unparented) opencode session titled
-    # "guardrail-<agent>" — surface it last when present.
+    # "guardrail-<agent>" — surface it last when present. The UI hides these
+    # behind a toggle by default (kind=guardrail); they update on every
+    # adjudicated command and would otherwise dominate the stream.
     for sid, obj in objects.items():
         title = str(obj.get("title") or "")
         if sid in descendants or sid == session_id:
             continue
         if title.lower().startswith("guardrail"):
-            entry = _entry(sid, "guardrail", 1)
-            entry["title"] = title
-            agents.append(entry)
+            agents.append(_entry(sid, title or "guardrail", 1, kind="guardrail"))
 
     return {
         "session_id": session_id,

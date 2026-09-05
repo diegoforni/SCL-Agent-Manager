@@ -325,6 +325,8 @@ export interface SessionAgentInfo {
   title: string;
   parent_id?: string | null;
   depth: number;
+  /** "agent" = lead/subagent session; "guardrail" = judge session (toggled off by default in the UI) */
+  kind?: 'agent' | 'guardrail';
   created?: number | null;
   updated?: number | null;
 }

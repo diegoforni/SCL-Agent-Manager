@@ -168,8 +168,10 @@ OpenCode server on port `4096`. From the host you do not need the IP — use
   strip above the message stream lists **every agent participating in the
   run**: the lead session, each `coder56_phase` / `coder56_verifier` subagent
   it spawned (they exist only inside OpenCode, as child sessions), and the
-  `guardrail` judge session. Click a chip to pin one agent's stream; the
-  default follows the most recently active agent automatically.
+  `guardrail` judge session — hidden behind the amber `guardrail` toggle chip
+  (it updates on every adjudicated command and would otherwise dominate the
+  stream). Click a chip to pin one agent's stream; the default follows the
+  most recently active agent automatically.
 - **coder56 console** (port 9006, separate app) — per-run view with the live
   phase stream, guardrail verdict feed, and approvals.
 - **Run artifacts** — everything an engagement produces lands on the host under

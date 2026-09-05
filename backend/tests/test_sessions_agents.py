@@ -89,7 +89,13 @@ async def test_agents_tree_includes_descendants_and_guardrail(patched):
     assert labels["coder56_lead"] == "ses_lead"
     assert labels["coder56_phase"] == "ses_phase1"
     assert labels["coder56_verifier"] == "ses_verifier1"
-    assert labels["guardrail"] == "ses_guard"
+    assert labels["guardrail-coder56"] == "ses_guard"
+    # Kind discriminator: tree sessions are agents, the judge is guardrail.
+    kinds = {a["session_id"]: a["kind"] for a in result["agents"]}
+    assert kinds["ses_lead"] == "agent"
+    assert kinds["ses_phase1"] == "agent"
+    assert kinds["ses_verifier1"] == "agent"
+    assert kinds["ses_guard"] == "guardrail"
     # The unrelated root session must NOT be exposed.
     assert "ses_other_root" not in {a["session_id"] for a in result["agents"]}
     # Oldest-first ordering.
