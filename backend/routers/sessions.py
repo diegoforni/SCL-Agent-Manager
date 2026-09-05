@@ -69,13 +69,24 @@ async def _capture_turn(container_id: str, agent_type: str, session_id: str, hos
         logger.debug("session capture skipped for %s: %s", session_id[:12], exc)
 
 async def _forward_goal_to_guardrail(container_id: str, agent_type: str, goal_text: str) -> None:
-    """Append the operator's prompt to the coder56 guardrail's live goal file.
+    """Append the operator's prompt to the coder56 guardrail's live goal file
+    AND set the run's guardrail mode to "auto".
 
     The ClawKeeper guardrail (scope mode) reads /outputs/<run_id>/guardrail/goal.txt on
     every command and keeps the red-teamer in scope of it. We accumulate every
     coder56 session prompt so the goal is the full directive history (later
     directives refine/extend earlier ones). Best-effort: never raises into the
     prompt path. Only coder56 — soc_god keeps its baked-in GUARDRAIL_GOAL.
+
+    mode.txt=auto: agent-manager sessions are the AUTONOMOUS surface — the
+    judge still gates every command, but its verdict is enforced with no human
+    (execute/sanitize run; refuse returns feedback). Without this the run
+    defaults to "medium" and the first judge-flagged command parks the agent
+    in awaitHumanApproval forever — the Agents page has no approvals queue, so
+    the session just looks stuck (observed: one stale undecided approval from
+    a dead session blocked a NEW session for hours via awaitRunClearOfPending,
+    which polls before every command). HITL stays on the coder56 console,
+    whose launch writes its own mode.txt per criticality.
     """
     if agent_type != "coder56" or not (goal_text and goal_text.strip()):
         return
@@ -86,6 +97,7 @@ async def _forward_goal_to_guardrail(container_id: str, agent_type: str, goal_te
         # OS append is write-race-free; '--- directive ---' delimits cumulative goals.
         with open(goal_dir / "goal.txt", "a") as f:
             f.write(f"\n--- directive ---\n{goal_text.strip()}\n")
+        (goal_dir / "mode.txt").write_text("auto", encoding="utf-8")
     except Exception as exc:
         logger.warning("Could not forward guardrail goal for %s: %s", container_id[:12], exc)
 

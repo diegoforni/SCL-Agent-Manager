@@ -200,6 +200,33 @@ async def test_guardrail_pseudo_agent_absent_without_verdicts(
     assert await s.get_agent_messages("ses_lead", "guardrail:run-x") == []
 
 
+@pytest.mark.anyio
+async def test_goal_forward_sets_auto_mode(monkeypatch, tmp_path):
+    """Agent-manager sessions are the autonomous surface: forwarding a goal
+    must also write mode.txt=auto so a judge-flagged command is auto-decided
+    instead of parking the agent in awaitHumanApproval (the Agents page has no
+    approvals queue — HITL belongs to the coder56 console launches)."""
+    import backend.routers.sessions as s
+
+    async def fake_resolve(container_id):
+        return "run-am"
+
+    monkeypatch.setattr(s, "resolve_run_id", fake_resolve)
+    monkeypatch.setattr(s, "OUTPUTS_DIR", tmp_path)
+
+    await s._forward_goal_to_guardrail("ctr-1", "coder56", "enumerate the target subnet")
+
+    goal = (tmp_path / "run-am" / "guardrail" / "goal.txt").read_text()
+    assert "enumerate the target subnet" in goal
+    mode = (tmp_path / "run-am" / "guardrail" / "mode.txt").read_text().strip().lower()
+    assert mode == "auto"
+
+    # Non-coder56 agents keep their baked-in goal and must not touch mode.txt.
+    await s._forward_goal_to_guardrail("ctr-1", "soc_god", "watch the database")
+    assert not (tmp_path / "run-am" / "guardrail" / "goal.txt").read_text().endswith(
+        "watch the database\n")
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
