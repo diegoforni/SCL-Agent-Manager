@@ -5740,6 +5740,274 @@ def _phase_table_row(block: str, label: str) -> str:
     return val.strip(" |`").strip()
 
 
+# =============================================================================
+# Verifier JSONL salvage (VERIFIER_DROPPED_FINDINGS_REPORT 2026-08-25, Rec 1).
+# The verifier hand-writes audit/VERDICT records despite the json.dumps rule in
+# its prompt (i.1/j); three real loss classes were observed in the 2026-08-25
+# 37-agent audit, and each one makes strict json.loads drop the WHOLE record —
+# including CONFIRMED, ok_to_report=YES verdicts:
+#   (1) unescaped inner double quotes in a string value —
+#       "evidence_file":"/outputs/"<run_id>"/verifier/"<slug>".jsonl"  (a
+#       CONFIRMED 4.3 MEDIUM CWE-209 finding was lost exactly this way);
+#   (2) trailing shell garbage after the closing brace — a stray `echo` +
+#       misplaced quote appended by the writing command;
+#   (3) invalid escapes (\xNN — JSON allows only \uXXXX) and truncated
+#       mid-record lines (the jwt-logout VERDICT cut mid-string).
+# Every consumer of /outputs/<run_id>/verifier/*.jsonl now parses through
+# _read_verifier_records, which repairs what it can, and
+# _verifier_parse_alerts alarms on any candidate file whose VERDICT record
+# stayed unrecoverable instead of silently ignoring it.
+# =============================================================================
+
+_RE_BAD_HEX_ESCAPE = re.compile(r"\\x([0-9a-fA-F]{2})")
+# chars that may legally follow a closing quote in a JSON document
+_TOL_VALUE_CLOSE = set(',}]:')
+
+_TOL_LEGAL_ESCAPE = set('"\\/bfnrtu')
+
+
+def _fix_json_escapes(s: str) -> str:
+    r"""Repair escape sequences strict JSON rejects: \xNN -> the literal char,
+    and a backslash before any char that cannot start a JSON escape -> that
+    char alone (a lone backslash-backtick was the command-injection file's
+    failure). \uXXXX and the legal \" \\ \/ \b \f \n \r \t pass untouched."""
+    s = _RE_BAD_HEX_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), s)
+    return re.sub(r'\\(?!["\\/bfnrtu])', "", s)
+
+
+def _tol_scan_string(s: str, i: int) -> Tuple[Optional[str], int]:
+    """Tolerant JSON string scan starting at the OPENING quote s[i]=='"'.
+    Repair rule for unescaped inner quotes: a '"' only CLOSES the string when
+    the next non-space char can legally follow a closed value (, } ] : or end
+    of line); otherwise it is a literal quote inside the value. Returns
+    (value, index_after_close) or (None, len(s)) when truncated unterminated."""
+    n = len(s)
+    i += 1
+    out: List[str] = []
+    while i < n:
+        c = s[i]
+        if c == "\\" and i + 1 < n:
+            nxt = s[i + 1]
+            if nxt == "u" and i + 6 <= n:
+                try:
+                    out.append(chr(int(s[i + 2:i + 6], 16)))
+                    i += 6
+                    continue
+                except ValueError:
+                    pass
+            out.append(nxt)
+            i += 2
+            continue
+        if c == '"':
+            j = i + 1
+            while j < n and s[j] in " \t\r\n":
+                j += 1
+            if j >= n or s[j] in _TOL_VALUE_CLOSE:
+                return "".join(out), j
+            out.append('"')  # embedded unescaped quote — keep it literally
+            i += 1
+            continue
+        out.append(c)
+        i += 1
+    return None, n
+
+
+def _tolerant_json_object(s: str) -> Optional[Dict[str, Any]]:
+    """Best-effort recovery of ONE flat-ish JSON object from a corrupt line.
+    Used only after strict parse + escape repair + raw_decode all failed.
+    A truncated tail yields the fields parsed so far rather than nothing (a
+    VERDICT cut mid-`reason` still carries its verdict/ok_to_report/cvss)."""
+    n = len(s)
+
+    def _ws(i: int) -> int:
+        while i < n and s[i] in " \t\r\n":
+            i += 1
+        return i
+
+    i = _ws(0)
+    if i >= n or s[i] != "{":
+        return None
+    i += 1
+    obj: Dict[str, Any] = {}
+    while True:
+        i = _ws(i)
+        if i >= n:
+            return obj or None            # truncated: salvage what parsed
+        if s[i] == "}":
+            return obj
+        if s[i] == ",":
+            i += 1
+            continue
+        if s[i] != '"':
+            return obj or None            # structure unrecoverable here
+        key, j = _tol_scan_string(s, i)
+        if key is None:
+            return obj or None
+        i = _ws(j)
+        if i >= n or s[i] != ":":
+            return obj or None
+        i = _ws(i + 1)
+        if i >= n:
+            return obj or None
+        c = s[i]
+        if c == '"':
+            val, i = _tol_scan_string(s, i)
+            if val is None:
+                return obj or None        # truncated inside this value
+        elif c.isdigit() or c == "-":
+            m = re.match(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", s[i:])
+            if not m:
+                return obj or None
+            txt = m.group(0)
+            val = float(txt) if any(ch in txt for ch in ".eE") else int(txt)
+            i += len(txt)
+        elif s.startswith("true", i):
+            val, i = True, i + 4
+        elif s.startswith("false", i):
+            val, i = False, i + 5
+        elif s.startswith("null", i):
+            val, i = None, i + 4
+        elif c in "[{":
+            # nested value: balanced scan (string-aware via the tolerant
+            # close rule), then strict-parse the slice; raw text as fallback.
+            depth = 0
+            j = i
+            close_of = "}" if c == "{" else "]"
+            while j < n:
+                ch = s[j]
+                if ch == '"':
+                    _, j2 = _tol_scan_string(s, j)
+                    if j2 >= n:
+                        return obj or None
+                    j = j2
+                    continue
+                if ch in "{[":
+                    depth += 1
+                elif ch in "}]":
+                    depth -= 1
+                    if depth == 0 and ch == close_of:
+                        j += 1
+                        break
+                j += 1
+            raw = s[i:j]
+            try:
+                val = json.loads(raw)
+            except Exception:
+                val = raw
+            i = j
+        else:
+            return obj or None
+        obj[key] = val
+
+
+def _salvage_json_objects(ln: str) -> Tuple[List[Dict[str, Any]], bool]:
+    """ALL dict records recoverable from one physical JSONL line, plus whether
+    any repair was needed. Order of attack: strict parse; escape-repaired
+    parse; a raw_decode LOOP over the line — which recovers multiple objects
+    concatenated onto one line by a missing newline (the jwt-logout CONFIRMED
+    9.1 CRITICAL verdict was lost exactly this way: `...logout"}
+    {"step":"VERDICT",...`) and tolerates trailing garbage (a stray `echo`);
+    finally the tolerant scanner for a corrupt final object, which salvages
+    the fields parsed before a mid-record truncation."""
+    s = ln.strip()
+    if not s.startswith("{"):
+        return [], False
+    try:
+        d = json.loads(s)
+        return ([d], False) if isinstance(d, dict) else ([], False)
+    except Exception:
+        pass
+    fixed = _fix_json_escapes(s)
+    out: List[Dict[str, Any]] = []
+    # reaching this loop at all means strict parse failed — any recovery here
+    # (escape repair, concatenated objects, trailing garbage, tolerant scan)
+    # counts as salvage
+    salvaged = True
+    dec = json.JSONDecoder()
+    pos, n = 0, len(fixed)
+    while pos < n:
+        # skip whitespace / separators between concatenated objects
+        while pos < n and (fixed[pos].isspace() or fixed[pos] in ",;"):
+            pos += 1
+        if pos >= n:
+            break
+        if fixed[pos] != "{":
+            nxt = fixed.find("{", pos)
+            if nxt == -1:
+                break
+            salvaged = True   # leading garbage (stray echo/quoting) skipped
+            pos = nxt
+        try:
+            obj, end = dec.raw_decode(fixed, pos)
+        except ValueError:
+            obj = _tolerant_json_object(fixed[pos:])
+            if isinstance(obj, dict) and obj:
+                out.append(obj)
+                salvaged = True
+            break  # corrupt from here — best effort stops after this object
+        if isinstance(obj, dict):
+            out.append(obj)
+        if end <= pos:
+            break
+        pos = end
+    if out:
+        return out, salvaged
+    return [], False
+
+
+def _salvage_json_line(ln: str) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """Single-record view of _salvage_json_objects (first record on the line)
+    for consumers that only care whether THIS line carries a record."""
+    ds, salvaged = _salvage_json_objects(ln)
+    return (ds[0] if ds else None), salvaged
+
+
+def _read_verifier_records(path: Path) -> Tuple[List[Dict[str, Any]], List[int]]:
+    """Every dict record in a verifier .jsonl, line-by-line, salvaging
+    malformed lines (and concatenated records) instead of skipping them.
+    Returns (records, bad_line_numbers) so callers can distinguish 'file has
+    verdicts' from 'file has content we still cannot read'."""
+    recs: List[Dict[str, Any]] = []
+    bad: List[int] = []
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return recs, bad
+    for idx, ln in enumerate(text.splitlines()):
+        if not ln.strip():
+            continue
+        ds, _ = _salvage_json_objects(ln)
+        if ds:
+            recs.extend(ds)
+        else:
+            bad.append(idx)
+    return recs, bad
+
+
+def _verifier_parse_alerts(run_id: str) -> List[str]:
+    """Operator-visible alarms for verifier candidate files that carry content
+    but NO parseable (even salvaged) VERDICT record — the silent-loss class
+    where a verdict exists on disk yet never reaches any report. Empty when
+    every candidate file either has a VERDICT record or never got content."""
+    vdir = OUTPUTS_DIR / run_id / "verifier"
+    alerts: List[str] = []
+    if not vdir.exists():
+        return alerts
+    for jf in sorted(vdir.glob("*.jsonl"), key=lambda p: p.name):
+        recs, bad = _read_verifier_records(jf)
+        if not recs and not bad:
+            continue  # empty file — nothing was ever attempted
+        if any(str(r.get("step", "")).upper() == "VERDICT" for r in recs):
+            continue  # verdict recovered
+        alerts.append(
+            f"{jf.name}: NO parseable VERDICT record ({len(recs)} audit record(s), "
+            f"{len(bad)} unparseable line(s)) — a verdict may have been written but "
+            f"lost to malformed/truncated serialization; re-run verification or "
+            f"re-emit the record."
+        )
+    return alerts
+
+
 def _verifier_verdict_for(run_id: str, endpoint: str, title: str) -> tuple:
     """Best-effort: does a coder56_verifier VERDICT record confirm or refute THIS
     finding? Matches by the finding's endpoint path appearing in the verdict's
@@ -5786,12 +6054,9 @@ def _verifier_verdict_for(run_id: str, endpoint: str, title: str) -> tuple:
         except Exception:
             continue
         for line in raw.splitlines():
-            try:
-                d = json.loads(line)
-            except Exception:
-                continue
-            if d.get("step") != "VERDICT":
-                continue
+            for d in _salvage_json_objects(line)[0]:
+                if d.get("step") != "VERDICT":
+                    continue
             route = f"{d.get('route', '')} {d.get('claim', '')}"
             if not any(n in route for n in needles):
                 continue
@@ -6048,24 +6313,16 @@ def _extract_verifier_findings(run_id: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     seen: set = set()
     for jf in sorted(vdir.glob("*.jsonl"), key=lambda p: p.name):
-        # Parse line-by-line and SKIP only the malformed line — do NOT abandon the
-        # whole file. The verifier routinely writes output_excerpt fields containing
-        # raw nested JSON (e.g. {"token":"eyJ..."} captured verbatim) with unescaped
-        # inner quotes, which makes that ONE record unparseable. The file's VERDICT
-        # record lives on a later, well-formed line; the old whole-file try/except
-        # let one bad record nuke the confirmed finding entirely (this is what
-        # dropped the owasp2 A01 BOLA — CONFIRMED, ok_to_report=YES — even though its
-        # VERDICT line parsed fine). 5/25 owasp2 verifier files were affected.
-        recs: List[Dict[str, Any]] = []
-        for ln in jf.read_text(encoding="utf-8", errors="ignore").splitlines():
-            if not ln.strip():
-                continue
-            try:
-                d = json.loads(ln)
-            except Exception:
-                continue
-            if isinstance(d, dict):
-                recs.append(d)
+        # Parse line-by-line and SALVAGE malformed lines instead of skipping
+        # them (do NOT abandon the whole file either). The verifier routinely
+        # hand-writes records with unescaped inner quotes, invalid \xNN
+        # escapes, trailing shell garbage, or truncation — the 2026-08-25
+        # audit found a CONFIRMED 4.3 MEDIUM VERDICT lost to exactly this
+        # (unescaped quotes in evidence_file), plus the owasp2 A01 BOLA lost
+        # to a whole-file parse abandon before per-line parsing existed.
+        # _read_verifier_records applies strict parse -> escape repair ->
+        # raw_decode -> tolerant scan, in that order.
+        recs, _bad = _read_verifier_records(jf)
         verdict = next((d for d in recs if d.get("step") == "VERDICT"), None)
         if not verdict:
             continue
@@ -6091,7 +6348,15 @@ def _extract_verifier_findings(run_id: str) -> List[Dict[str, Any]]:
             continue
         seen.add(ident)
         cvss = None
-        m = re.match(r"\s*([0-9]+(?:\.[0-9]+)?)", str(verdict.get("cvss") or ""))
+        # canonical shape is "<score> <band>" (leading number), but salvaged
+        # verdicts from real runs also carry "CVSS:3.1/<vector> => 9.1 =>
+        # CRITICAL" — read the arrow-delimited score or a number directly
+        # followed by a band word, never the vector's own "3.1".
+        cvss_raw = str(verdict.get("cvss") or "")
+        m = (re.match(r"\s*([0-9]+(?:\.[0-9]+)?)", cvss_raw)
+             or re.search(r"=>\s*([0-9]+(?:\.[0-9]+)?)\s*=>", cvss_raw)
+             or re.search(r"([0-9]+(?:\.[0-9]+)?)\s*"
+                          r"(?:NONE|LOW|MEDIUM|HIGH|CRITICAL)", cvss_raw, re.I))
         if m:
             try:
                 cvss = float(m.group(1))
@@ -6467,17 +6732,8 @@ def _retract_contradicted_findings(engagement: Dict[str, Any],
         seq += 1
 
     for jf in sorted(vdir.glob("*.jsonl"), key=lambda p: p.name):
-        try:
-            text = jf.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
-        for ln in text.splitlines():
-            if not ln.strip():
-                continue
-            try:
-                d = json.loads(ln)
-            except Exception:
-                continue
+        recs, _bad = _read_verifier_records(jf)
+        for d in recs:
             _ingest(d)
     for jf in sorted(vdir.glob("*.json"), key=lambda p: p.name):
         try:
@@ -6798,6 +7054,7 @@ async def draft_findings(engagement_id: str, req: FindingsDraftRequest) -> Dict[
     if not live_runs:
         return {"findings": [], "coverage": _coverage(eng, [], engagement_id),
                 "coverage_ledger": _surface_coverage(engagement_id, []),
+                "verifier_parse_alerts": [],
                 "note": ("No run artifacts found yet"
                           + (f" for {req.owasp_id}" if req.owasp_id else "")
                           + " — run the engagement, then draft findings.")}
@@ -6811,26 +7068,44 @@ async def draft_findings(engagement_id: str, req: FindingsDraftRequest) -> Dict[
     # trail (what was tested and ruled out) stays visible without being saved.
     refuted = [f for f in findings if _finding_is_refuted(f)]
     findings = [f for f in findings if not _finding_is_refuted(f)]
+    # Serialization-loss alarm (2026-08-25 audit Rec 1): a candidate file whose
+    # VERDICT record stays unparseable even after salvage is a possible lost
+    # verdict — surface it to the operator instead of silently ignoring the
+    # file (a CONFIRMED 4.3 MEDIUM vanished exactly this way).
+    parse_alerts: List[str] = []
+    for rid in live_runs:
+        for alert in _verifier_parse_alerts(rid):
+            parse_alerts.append(f"[{rid}] {alert}")
+            logger.warning("verifier_parse_alert[%s] %s", rid, alert)
     coverage = _coverage(eng, findings, engagement_id)
     coverage_ledger = _surface_coverage(engagement_id, findings)
     confirmed = sum(1 for f in findings if f.get("verified"))
     if not findings:
         refuted_note = (f" ({len(refuted)} refuted finding(s) excluded — see 'refuted')"
                         if refuted else "")
+        alert_note = (f" {len(parse_alerts)} verifier file(s) have NO parseable VERDICT "
+                      f"record — see 'verifier_parse_alerts'."
+                      if parse_alerts else "")
         return {"findings": [], "refuted": refuted, "coverage": coverage,
                 "coverage_ledger": coverage_ledger,
+                "verifier_parse_alerts": parse_alerts,
                 "note": (f"No findings found across {len(live_runs)} run(s)"
                          + (f" for {req.owasp_id}" if req.owasp_id else "")
                          + " — neither verifier verdicts nor emission logs produced a CONFIRMED/claimed finding."
-                         + refuted_note)}
+                         + refuted_note + alert_note)}
     note = (f"Drafted {len(findings)} finding(s) ({confirmed} verifier-confirmed) from "
             f"{len(live_runs)} run(s)" + (f" for {req.owasp_id}" if req.owasp_id else "")
             + " — review, edit, and save the ones you keep.")
     if refuted:
         note += (f" {len(refuted)} refuted finding(s) (NOT_A_VULN / ok_to_report=NO) excluded "
                  "from suggestions; see 'refuted' for the audit trail.")
+    if parse_alerts:
+        note += (f" WARNING: {len(parse_alerts)} verifier file(s) carry no parseable "
+                 "VERDICT record — a verdict may have been lost to malformed "
+                 "serialization; see 'verifier_parse_alerts'.")
     return {"findings": findings, "refuted": refuted, "coverage": coverage,
-            "coverage_ledger": coverage_ledger, "note": note}
+            "coverage_ledger": coverage_ledger, "note": note,
+            "verifier_parse_alerts": parse_alerts}
 
 
 # =============================================================================
@@ -7152,6 +7427,13 @@ async def _reconcile_reportwriter(engagement_id: str, *, force: bool = False) ->
         if not findings:
             live = [r for r in (eng.get("run_ids") or []) if _read_run_meta(r)]
             findings = _coerce_reporter_findings(_draft_findings_inprocess(eng, live)) if live else []
+            # Serialization-loss alarm (2026-08-25 audit Rec 1): a run whose
+            # verifier files carry content but no parseable VERDICT record may
+            # have lost a verdict — log it so the silent-loss class is at least
+            # visible in the dashboard log during automatic reconciliation.
+            for r in live:
+                for alert in _verifier_parse_alerts(r):
+                    logger.warning("verifier_parse_alert[%s] %s", r, alert)
         if not findings:
             # Nothing to report yet; nothing to reconcile. Do not touch status.
             return False
