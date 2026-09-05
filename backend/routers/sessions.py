@@ -444,18 +444,89 @@ async def list_session_agents(session_id: str) -> Dict[str, Any]:
     # "guardrail-<agent>" — surface it last when present. The UI hides these
     # behind a toggle by default (kind=guardrail); they update on every
     # adjudicated command and would otherwise dominate the stream.
+    has_guardrail_session = False
     for sid, obj in objects.items():
         title = str(obj.get("title") or "")
         if sid in descendants or sid == session_id:
             continue
         if title.lower().startswith("guardrail"):
+            has_guardrail_session = True
             agents.append(_entry(sid, title or "guardrail", 1, kind="guardrail"))
+
+    # Current guardrail builds judge via direct LLM calls and leave NO opencode
+    # session behind — their only footprint is the run's verdicts.ndjson.
+    # Synthesize a pseudo-agent from that file so the toggle still surfaces
+    # guardrail activity for these deployments.
+    if not has_guardrail_session:
+        run_id = ""
+        try:
+            run_id = await resolve_run_id(tree["session"].get("container_id"))
+        except Exception:
+            run_id = ""
+        vpath = (OUTPUTS_DIR / run_id / "guardrail" / "verdicts.ndjson") if run_id else None
+        if vpath and vpath.is_file():
+            agents.append({
+                "session_id": f"guardrail:{run_id}",
+                "label": "guardrail (verdicts)",
+                "title": f"guardrail/verdicts.ndjson — {run_id}",
+                "parent_id": None,
+                "depth": 1,
+                "kind": "guardrail",
+                "created": None,
+                "updated": int(vpath.stat().st_mtime * 1000),
+            })
 
     return {
         "session_id": session_id,
         "container_id": tree["session"].get("container_id"),
         "agents": agents,
     }
+
+def _verdict_messages(run_id: str, limit: int, offset: int) -> List[SessionMessage]:
+    """Render the run's guardrail verdicts.ndjson tail as a chronological
+    message stream (one SessionMessage per verdict). Page 0 = the most recent
+    `limit` verdicts, oldest-first so it reads like a chat."""
+    path = OUTPUTS_DIR / run_id / "guardrail" / "verdicts.ndjson"
+    if not path.is_file():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return []
+    recs: List[Dict[str, Any]] = []
+    for ln in lines:
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            recs.append(json.loads(ln))
+        except Exception:
+            continue
+    end = len(recs) - offset
+    start = max(0, end - limit)
+    out: List[SessionMessage] = []
+    for i, d in enumerate(recs[start:end], start=start):
+        ts = str(d.get("ts") or "")
+        try:
+            timestamp = datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else datetime.utcnow()
+        except ValueError:
+            timestamp = datetime.utcnow()
+        decision = str(d.get("decision") or "?").upper()
+        cmd = " ".join(str(d.get("command") or "").split())[:200]
+        reason = " ".join(str(d.get("reason") or "").split())[:300]
+        exit_code = d.get("exit_code")
+        content = f"[{decision}] {cmd}\n{reason}"
+        if exit_code is not None:
+            content += f"\nexit={exit_code}"
+        out.append(SessionMessage(
+            id=f"verdict-{run_id}-{i}",
+            timestamp=timestamp,
+            role="assistant",
+            content=content,
+            tool_calls=[],
+            tokens_used=0,
+        ))
+    return out
 
 @router.get("/{session_id}/agents/{agent_session_id}/messages", response_model=List[SessionMessage])
 async def get_agent_messages(
@@ -466,7 +537,11 @@ async def get_agent_messages(
 ) -> List[SessionMessage]:
     """Messages for one of the session's agents (root, subagent, or guardrail).
     The agent session id must belong to the root's tree — arbitrary container
-    sessions are not addressable through this endpoint."""
+    sessions are not addressable through this endpoint. Guardrail pseudo-ids
+    ("guardrail:<run_id>") render the run's verdict log instead."""
+    if agent_session_id.startswith("guardrail:"):
+        return _verdict_messages(agent_session_id.split(":", 1)[1], limit, offset)
+
     tree = await _resolve_session_tree(session_id)
     objects: Dict[str, Any] = tree["objects"]
 

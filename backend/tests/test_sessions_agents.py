@@ -131,5 +131,75 @@ async def test_unknown_root_session_404(patched, monkeypatch):
 
 
 @pytest.fixture
+def patched_no_guardrail_session(monkeypatch, tmp_path):
+    """Same container as `patched` but WITHOUT the guardrail-titled opencode
+    session — the deployment shape where the guardrail judges out-of-band and
+    only verdicts.ndjson remains."""
+    objects = [
+        _obj("ses_lead", title="engagement directive", created=1, updated=50),
+        _obj("ses_phase1", parent="ses_lead", title="OBJECTIVE: Phase 1", created=2, updated=40),
+    ]
+
+    class FakeSM:
+        def get_session(self, sid):
+            if sid != "ses_lead":
+                return None
+            return {"container_id": "ctr-1", "host_id": "h1", "agent_type": "coder56"}
+
+    async def fake_list(host=None, port=None, timeout=None):
+        return {"success": True, "sessions": objects}
+
+    async def fake_resolve(container_id):
+        return "run-x"
+
+    (tmp_path / "run-x" / "guardrail").mkdir(parents=True)
+    (tmp_path / "run-x" / "guardrail" / "verdicts.ndjson").write_text(
+        '{"ts": "2026-09-05T03:49:52.957Z", "decision": "execute", "command": "nmap -sV target", '
+        '"reason": "in scope", "exit_code": 0}\n'
+        '{"ts": "2026-09-05T03:50:48.547Z", "decision": "refuse", "command": "rm -rf /", '
+        '"reason": "destructive", "exit_code": null}\n'
+        "not-json-garbage\n"
+    )
+
+    monkeypatch.setattr(s, "get_state_manager", lambda: FakeSM())
+    monkeypatch.setattr(s, "_ensure_network_connectivity", lambda cid: _async_none())
+    monkeypatch.setattr(s, "_get_container_address", lambda cid: _async_ret("10.0.0.5"))
+    monkeypatch.setattr(s, "list_session_objects_async", fake_list)
+    monkeypatch.setattr(s, "resolve_run_id", fake_resolve)
+    monkeypatch.setattr(s, "OUTPUTS_DIR", tmp_path)
+    return tmp_path
+
+
+@pytest.mark.anyio
+async def test_guardrail_pseudo_agent_from_verdicts(patched_no_guardrail_session):
+    """With no guardrail opencode session, the verdict log becomes a
+    kind=guardrail pseudo-agent so the UI toggle still works."""
+    result = await s.list_session_agents("ses_lead")
+
+    guard = [a for a in result["agents"] if a["kind"] == "guardrail"]
+    assert len(guard) == 1
+    assert guard[0]["session_id"] == "guardrail:run-x"
+    assert guard[0]["label"] == "guardrail (verdicts)"
+    assert isinstance(guard[0]["updated"], int)
+
+    msgs = await s.get_agent_messages("ses_lead", "guardrail:run-x")
+    assert len(msgs) == 2  # garbage line skipped
+    assert msgs[0].content.startswith("[EXECUTE] nmap -sV target")
+    assert "[REFUSE] rm -rf /" in msgs[1].content
+    assert msgs[0].timestamp <= msgs[1].timestamp
+
+
+@pytest.mark.anyio
+async def test_guardrail_pseudo_agent_absent_without_verdicts(
+        patched_no_guardrail_session, monkeypatch):
+    """No judge session AND no verdicts file -> no guardrail entry at all."""
+    import shutil
+    shutil.rmtree(patched_no_guardrail_session / "run-x" / "guardrail")
+    result = await s.list_session_agents("ses_lead")
+    assert not [a for a in result["agents"] if a["kind"] == "guardrail"]
+    assert await s.get_agent_messages("ses_lead", "guardrail:run-x") == []
+
+
+@pytest.fixture
 def anyio_backend():
     return "asyncio"
