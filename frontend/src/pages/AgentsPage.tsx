@@ -13,6 +13,7 @@ function AgentPanel({
   template,
   sessions,
   isGuarded,
+  ip,
   verifierEnabled,
   verifierApplying,
   onToggleVerifier,
@@ -21,6 +22,7 @@ function AgentPanel({
   template?: AgentTemplate;
   sessions: SessionInfo[];
   isGuarded?: boolean;
+  ip?: string;
   verifierEnabled?: boolean;
   verifierApplying?: boolean;
   onToggleVerifier?: () => void;
@@ -185,6 +187,14 @@ function AgentPanel({
           <h3 className="font-heading text-lg font-bold text-trident-accent truncate" title={`${label} on ${assignment.host_name}`}>{label} on {assignment.host_name}</h3>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
+          {ip && (
+            <span
+              title={`Container IP on the topology network (${assignment.container_name}) — full per-network list: docker inspect ${assignment.container_id.slice(0, 12)}`}
+              className="badge bg-trident-border/40 text-trident-muted font-mono"
+            >
+              {ip}
+            </span>
+          )}
           {isGuarded && (
             <span className="badge badge-warning flex items-center gap-1" title="Guarded by ClawKeeper (bash commands audited)">
               <Shield size={12} />
@@ -316,6 +326,7 @@ export function AgentsPage() {
   const [templates, setTemplates] = useState<Record<string, AgentTemplate>>({});
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [runningTopologyIds, setRunningTopologyIds] = useState<Set<string>>(new Set());
+  const [containerIps, setContainerIps] = useState<Record<string, string>>({});
   const [topologyDetails, setTopologyDetails] = useState<Record<string, Topology>>({});
   const [verifierApplying, setVerifierApplying] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
@@ -351,6 +362,13 @@ export function AgentsPage() {
             .filter((id): id is string => Boolean(id))
         );
         setRunningTopologyIds(runningIds);
+
+        // Container IPs from the same discovery response (no extra requests).
+        const ips: Record<string, string> = {};
+        containersResult.value.containers.forEach((c: ContainerInfo) => {
+          if (c.container_id && c.ip_address) ips[c.container_id] = c.ip_address;
+        });
+        setContainerIps(ips);
 
         // Only request assignments for running topologies. The unfiltered
         // endpoint loads every saved topology and is unnecessarily expensive.
@@ -564,6 +582,7 @@ export function AgentsPage() {
               template={templates[a.agent_type]}
               sessions={sessions}
               isGuarded={hostGuardedMap[`${a.topology_id}:${a.host_id}`] ?? false}
+              ip={containerIps[a.container_id]}
               verifierEnabled={hostVerifierMap[`${a.topology_id}:${a.host_id}`] ?? true}
               verifierApplying={verifierApplying[`${a.topology_id}:${a.host_id}`] ?? false}
               onToggleVerifier={() => toggleVerifier(a)}
