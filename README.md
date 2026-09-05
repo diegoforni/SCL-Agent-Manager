@@ -122,6 +122,8 @@ export LLM_MODEL=qwen3-coder
 | GET | `/api/sessions/list` | List sessions |
 | GET | `/api/sessions/{session_id}` | Get session info |
 | GET | `/api/sessions/{session_id}/messages` | Get messages |
+| GET | `/api/sessions/{session_id}/agents` | Agent sessions in this run (lead, subagents, guardrail) |
+| GET | `/api/sessions/{session_id}/agents/{agent_session_id}/messages` | Messages of one agent in the run |
 | POST | `/api/sessions` | Create a session with an initial goal |
 
 ## How It Works
@@ -133,12 +135,104 @@ export LLM_MODEL=qwen3-coder
 5. The **Agents** page filters assignments so only agents from currently-running topologies are shown.
 6. Creating a session calls the OpenCode HTTP API inside the container on port `4096`.
 
+## Working With Agents
+
+### Where agents live
+
+Every agent runs inside the topology host container assigned to it (e.g. the
+`atk_1` attacker box). The container is visible on the **Agents** page; the
+container id shown there is the Docker container to use in every command below.
+
+### Which IP does an agent's container have?
+
+Topology containers attach to per-topology Docker networks, so each container
+has one IP per attached network:
+
+```bash
+# All networks + IPs of one agent container
+docker inspect <container> --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}: {{$v.IPAddress}}{{"\n"}}{{end}}'
+
+# IPs of every running topology container
+docker ps --filter label=scl.plugin=network-topology --format '{{.Names}}' | \
+  xargs -I{} docker inspect {} --format '{}: {{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}'
+```
+
+The Agent Manager backend reaches these IPs directly: on first contact it
+attaches itself to the topology's network and then talks to the container's
+OpenCode server on port `4096`. From the host you do not need the IP — use
+`docker exec` (below).
+
+### Seeing what the agents are doing
+
+- **Agents page** — each panel is one deployed agent. For `coder56`, the chip
+  strip above the message stream lists **every agent participating in the
+  run**: the lead session, each `coder56_phase` / `coder56_verifier` subagent
+  it spawned (they exist only inside OpenCode, as child sessions), and the
+  `guardrail` judge session. Click a chip to pin one agent's stream; the
+  default follows the most recently active agent automatically.
+- **coder56 console** (port 9006, separate app) — per-run view with the live
+  phase stream, guardrail verdict feed, and approvals.
+- **Run artifacts** — everything an engagement produces lands on the host under
+  `/outputs/<run_id>/` (phase reports, verifier `*.jsonl` verdicts, guardrail
+  `verdicts.ndjson`, memory, and an `opencode.db` snapshot of the full agent
+  transcripts at every phase boundary).
+- **Raw logs**:
+  ```bash
+  docker logs -f <container>            # container / OpenCode server output
+  docker exec <container> tail -50 /root/.local/share/opencode/log/*.log
+  ```
+
+### Talking to OpenCode directly
+
+Each agent container runs an OpenCode HTTP server on port `4096` (localhost
+inside the container). The dashboard is a thin proxy over it — you can drive
+or inspect it yourself with `docker exec` + curl:
+
+```bash
+# Health
+docker exec <container> curl -s http://localhost:4096/global/health
+
+# All sessions in this container (children carry parentID = the lead session)
+docker exec <container> curl -s http://localhost:4096/session | python3 -m json.tool
+
+# One session's transcript
+docker exec <container> curl -s http://localhost:4096/session/<session_id>/message | python3 -m json.tool
+
+# Session busy/idle map
+docker exec <container> curl -s http://localhost:4096/session/status
+
+# Create a session
+docker exec <container> curl -s -X POST http://localhost:4096/session \
+  -H 'Content-Type: application/json' \
+  -d '{"title": "manual steer"}'
+
+# Send a prompt to a session (async fire-and-forget; use /message for sync)
+docker exec <container> curl -s -X POST http://localhost:4096/session/<session_id>/prompt_async \
+  -H 'Content-Type: application/json' \
+  -d '{"parts": [{"type": "text", "text": "SUMMARY: what did you establish so far?"}]}'
+
+# Abort a runaway session
+docker exec <container> curl -s -X POST http://localhost:4096/session/<session_id>/abort
+```
+
+Prompt bodies use the `{"parts": [{"type": "text", "text": "..."}]}` shape and
+accept an optional `"agent"` field (e.g. `"coder56"`) to select which baked-in
+agent persona answers. Prefer the dashboard for anything the guardrail should
+see — direct OpenCode prompts bypass the Agents-page goal forwarding that
+keeps the coder56 guardrail's live goal file up to date.
+
 ## Testing
 
 Run the assignment verification test:
 
 ```bash
 python tests/test_assignments.py
+```
+
+Backend unit tests (no containers required):
+
+```bash
+python3 -m pytest backend/tests/ -q
 ```
 
 ## Troubleshooting

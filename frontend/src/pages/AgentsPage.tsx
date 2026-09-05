@@ -4,7 +4,7 @@ import { SessionStream } from '@/components/SessionStream';
 import { ReplayAgentView, ReplayHeader } from '@/components/ReplayAgentView';
 import { useReplayContext } from '@/contexts/ReplayContext';
 import api, { APIError } from '@/api';
-import type { AgentStateAssignment, SessionMessage, AgentTemplate, SessionInfo, AgentType, ContainerInfo, Topology, Host } from '@/types';
+import type { AgentStateAssignment, SessionMessage, SessionAgentInfo, AgentTemplate, SessionInfo, AgentType, ContainerInfo, Topology, Host } from '@/types';
 import { ContainerState } from '@/types';
 
 // Agent Panel Component
@@ -29,6 +29,13 @@ function AgentPanel({
   const [messages, setMessages] = useState<SessionMessage[]>([]);
   const [goal, setGoal] = useState('');
   const [isStarting, setIsStarting] = useState(false);
+  // Sub-agent view (coder56): the lead session spawns coder56_phase /
+  // coder56_verifier children that only exist inside opencode. `agents` is the
+  // discovered tree; `followLatest` auto-tracks the most recently active agent
+  // until the operator pins one explicitly.
+  const [agents, setAgents] = useState<SessionAgentInfo[]>([]);
+  const [pinnedAgentId, setPinnedAgentId] = useState<string | null>(null);
+  const isCoder56 = assignment.agent_type === 'coder56';
 
   const mySessions = useMemo(() => sessions.filter(s =>
     s.container_id === assignment.container_id &&
@@ -45,6 +52,49 @@ function AgentPanel({
     });
   }, [mySessions]);
 
+  // Discover the session's agent tree (lead + Task-tool subagents + guardrail).
+  // Polled slowly — it only changes when a subagent is spawned or finishes.
+  useEffect(() => {
+    if (!activeSession || !isCoder56) {
+      setAgents([]);
+      return;
+    }
+
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const pollAgents = async () => {
+      try {
+        const next = await api.getSessionAgents(activeSession.session_id);
+        if (!cancelled) setAgents(next);
+      } catch (err) {
+        console.error("Error polling session agents", err);
+      } finally {
+        if (!cancelled) {
+          timer = window.setTimeout(pollAgents, 10000);
+        }
+      }
+    };
+
+    pollAgents();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [activeSession?.session_id, isCoder56]);
+
+  const latestAgentId = useMemo(() => {
+    if (!activeSession || agents.length === 0) return activeSession?.session_id ?? null;
+    const withTimes = agents.filter(a => typeof a.updated === 'number');
+    const newest = withTimes.reduce((acc, a) => (a.updated! > acc.updated! ? a : acc), withTimes[0]);
+    return newest?.session_id ?? activeSession.session_id;
+  }, [agents, activeSession?.session_id]);
+
+  const selectedAgentId = pinnedAgentId && agents.some(a => a.session_id === pinnedAgentId)
+    ? pinnedAgentId
+    : latestAgentId;
+  const selectedAgent = agents.find(a => a.session_id === selectedAgentId);
+
   // Poll only this panel's active session messages, scheduling the next poll
   // after the previous request finishes so slow requests never overlap.
   useEffect(() => {
@@ -58,7 +108,10 @@ function AgentPanel({
 
     const pollMessages = async () => {
       try {
-        const msgs = await api.getSessionMessages(activeSession.session_id);
+        const rootId = activeSession.session_id;
+        const msgs = (selectedAgentId && selectedAgentId !== rootId)
+          ? await api.getSessionAgentMessages(rootId, selectedAgentId)
+          : await api.getSessionMessages(rootId);
         if (!cancelled) {
           setMessages(msgs);
         }
@@ -76,7 +129,7 @@ function AgentPanel({
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [activeSession?.session_id]);
+  }, [activeSession?.session_id, selectedAgentId]);
 
   const handleStartGoal = async () => {
     if (!goal.trim()) return;
@@ -178,10 +231,44 @@ function AgentPanel({
         </button>
       </div>
 
+      {/* Agent selector: lead + subagents + guardrail for coder56 runs */}
+      {isCoder56 && agents.length > 0 && (
+        <div className="mb-2 flex items-center gap-1 overflow-x-auto pb-1">
+          {agents.map(a => {
+            const isActive = a.session_id === selectedAgentId;
+            return (
+              <button
+                key={a.session_id}
+                onClick={() => setPinnedAgentId(a.session_id)}
+                title={a.title || a.label}
+                className={`flex-shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium border transition-colors ${
+                  isActive
+                    ? 'bg-trident-accent/20 text-trident-accent border-trident-accent/50'
+                    : 'bg-trident-bg text-trident-muted border-trident-border/50 hover:text-trident-text'
+                }`}
+              >
+                {a.label}
+              </button>
+            );
+          })}
+          {pinnedAgentId && (
+            <button
+              onClick={() => setPinnedAgentId(null)}
+              title="Follow the most recently active agent automatically"
+              className="flex-shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium border border-dashed border-trident-border/50 text-trident-muted hover:text-trident-text"
+            >
+              auto-follow latest
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="mb-2 flex gap-1 rounded-lg bg-trident-bg p-1">
         <div className="flex-1 rounded-md px-2 py-1 text-xs font-medium bg-trident-accent/20 text-trident-accent flex items-center justify-center">
           <MessageSquare size={12} className="mr-1" />
-          Messages ({messages.length})
+          {selectedAgent && selectedAgent.session_id !== activeSession?.session_id
+            ? `${selectedAgent.label} — ${messages.length} msgs`
+            : `Messages (${messages.length})`}
         </div>
       </div>
 

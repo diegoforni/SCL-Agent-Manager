@@ -315,6 +315,21 @@ export interface SessionMetrics {
 }
 
 /**
+ * An agent participating in a session's run: the root (lead) session, an
+ * opencode child session spawned via the Task tool (coder56_phase,
+ * coder56_verifier, ...), or the container's guardrail judge session.
+ */
+export interface SessionAgentInfo {
+  session_id: string;
+  label: string;
+  title: string;
+  parent_id?: string | null;
+  depth: number;
+  created?: number | null;
+  updated?: number | null;
+}
+
+/**
  * Information about an OpenCode session.
  */
 export interface SessionInfo extends Timestamped {

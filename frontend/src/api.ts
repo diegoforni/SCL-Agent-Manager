@@ -27,6 +27,7 @@ import type {
   SessionCreateRequest,
   SessionPromptRequest,
   SessionMessage,
+  SessionAgentInfo,
   AgentResponse,
   LogEntry,
   LogStreamResponse,
@@ -485,6 +486,33 @@ export async function getSessionMessages(
   const response = await apiClient.get<SessionMessage[]>(`/api/sessions/${sessionId}/messages`, {
     params: { limit, offset }
   });
+  return response.data;
+}
+
+/**
+ * List the agent sessions participating in a session's run (lead, Task-tool
+ * subagents, guardrail judge) for the Agents page sub-agent tabs.
+ */
+export async function getSessionAgents(sessionId: string): Promise<SessionAgentInfo[]> {
+  const response = await apiClient.get<{ agents: SessionAgentInfo[] }>(
+    `/api/sessions/${sessionId}/agents`
+  );
+  return response.data.agents ?? [];
+}
+
+/**
+ * Get messages for one of a session's agents (sub-agent or guardrail session)
+ */
+export async function getSessionAgentMessages(
+  sessionId: string,
+  agentSessionId: string,
+  limit: number = 100,
+  offset: number = 0
+): Promise<SessionMessage[]> {
+  const response = await apiClient.get<SessionMessage[]>(
+    `/api/sessions/${sessionId}/agents/${agentSessionId}/messages`,
+    { params: { limit, offset } }
+  );
   return response.data;
 }
 
@@ -1000,6 +1028,8 @@ export default {
   listSessions,
   getSession,
   getSessionMessages,
+  getSessionAgents,
+  getSessionAgentMessages,
   createSession,
   sendPrompt,
   deleteSession,

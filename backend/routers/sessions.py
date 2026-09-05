@@ -16,6 +16,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 import uuid
 import json
+import re
 import asyncio
 import logging
 
@@ -28,7 +29,7 @@ from ..models import (
     SessionPromptRequest
 )
 from ..services.container_addr import get_container_address, ContainerAddressError
-from ..services.opencode_client import create_session_async, send_prompt_async, get_session_messages_async, _ensure_network_connectivity
+from ..services.opencode_client import create_session_async, send_prompt_async, get_session_messages_async, list_session_objects_async, _ensure_network_connectivity
 from ..services.session_capture import resolve_run_id, capture_session_messages, OUTPUTS_DIR
 from ..services.state_manager import get_state_manager
 
@@ -340,6 +341,161 @@ async def get_messages(
     output = [_transform_opencode_message(m) for m in messages]
 
     return output[offset:offset+limit]
+
+# --- Sub-agent discovery (coder56 native_subagents orchestration) -------------
+#
+# A coder56 engagement runs as ONE opencode session (coder56_lead) that spawns
+# coder56_phase / coder56_verifier subagents via the Task tool. Those children
+# are full opencode sessions (parentID points at the spawner) but are NOT
+# registered in the state manager, so the Agents page historically showed only
+# the Lead's stream. The two endpoints below expose the whole tree.
+
+_SUBAGENT_TITLE_RE = re.compile(r"coder56_(\w+)")
+
+def _label_subagent(session_obj: Dict[str, Any], depth: int) -> str:
+    """Best-effort agent label for a child opencode session. The session object
+    does not carry the agent name, so fall back to depth-based defaults that
+    match the coder56 orchestration (depth 1 = phase, depth 2 = verifier)."""
+    title = str(session_obj.get("title") or "")
+    m = _SUBAGENT_TITLE_RE.search(title)
+    if m:
+        return f"coder56_{m.group(1)}"
+    if depth == 1:
+        return "coder56_phase"
+    if depth == 2:
+        return "coder56_verifier"
+    return f"subagent"
+
+async def _resolve_session_tree(session_id: str) -> Dict[str, Any]:
+    """Shared lookup for the agents endpoints: root state-manager session plus
+    its opencode session objects. Raises HTTPException on missing pieces."""
+    sm = get_state_manager()
+    session = sm.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    await _ensure_network_connectivity(session.get("container_id"))
+    host_addr = await _get_container_address(session.get("container_id"))
+
+    sres = await list_session_objects_async(host=host_addr, port=4096)
+    if not sres.get("success"):
+        # Container/opencode down (topology stopped, sandbox rebuilding) — return
+        # an empty tree rather than a 500 so the UI can fall back to the Lead.
+        return {"session": session, "host_addr": host_addr, "objects": {}}
+
+    objects = {
+        s.get("id"): s
+        for s in (sres.get("sessions") or [])
+        if isinstance(s, dict) and s.get("id")
+    }
+    return {"session": session, "host_addr": host_addr, "objects": objects}
+
+@router.get("/{session_id}/agents")
+async def list_session_agents(session_id: str) -> Dict[str, Any]:
+    """Agent sessions participating in this session's run: the root (lead)
+    session, every opencode child session spawned under it via the Task tool
+    (transitively), and the container's guardrail judge session(s) if present.
+    Children are ordered oldest-first so the UI can render a stable timeline."""
+    tree = await _resolve_session_tree(session_id)
+    objects: Dict[str, Any] = tree["objects"]
+
+    def _created(obj: Dict[str, Any]) -> float:
+        v = ((obj.get("time") or {}).get("created")) or 0
+        return v if isinstance(v, (int, float)) else 0
+
+    # BFS from the root over parentID links.
+    descendants: Dict[str, int] = {}
+    frontier = [session_id]
+    depth = 0
+    while frontier:
+        next_frontier = []
+        for node in frontier:
+            for sid, obj in objects.items():
+                if obj.get("parentID") == node and sid not in descendants:
+                    descendants[sid] = depth + 1
+                    next_frontier.append(sid)
+        frontier = next_frontier
+        depth += 1
+
+    def _entry(sid: str, label: str, dep: int) -> Dict[str, Any]:
+        obj = objects.get(sid) or {}
+        t = obj.get("time") or {}
+        return {
+            "session_id": sid,
+            "label": label,
+            "title": str(obj.get("title") or ""),
+            "parent_id": obj.get("parentID"),
+            "depth": dep,
+            "created": t.get("created"),
+            "updated": t.get("updated"),
+        }
+
+    agents = [_entry(session_id, "coder56_lead", 0)] if session_id in objects else [
+        # Root not yet visible via /session (created but never prompted).
+        {"session_id": session_id, "label": "coder56_lead", "title": "",
+         "parent_id": None, "depth": 0, "created": None, "updated": None}
+    ]
+    for sid, dep in sorted(descendants.items(), key=lambda kv: _created(objects.get(kv[0]) or {})):
+        agents.append(_entry(sid, _label_subagent(objects.get(sid) or {}, dep), dep))
+
+    # The guardrail judge runs its own (unparented) opencode session titled
+    # "guardrail-<agent>" — surface it last when present.
+    for sid, obj in objects.items():
+        title = str(obj.get("title") or "")
+        if sid in descendants or sid == session_id:
+            continue
+        if title.lower().startswith("guardrail"):
+            entry = _entry(sid, "guardrail", 1)
+            entry["title"] = title
+            agents.append(entry)
+
+    return {
+        "session_id": session_id,
+        "container_id": tree["session"].get("container_id"),
+        "agents": agents,
+    }
+
+@router.get("/{session_id}/agents/{agent_session_id}/messages", response_model=List[SessionMessage])
+async def get_agent_messages(
+    session_id: str,
+    agent_session_id: str,
+    limit: int = 100,
+    offset: int = 0
+) -> List[SessionMessage]:
+    """Messages for one of the session's agents (root, subagent, or guardrail).
+    The agent session id must belong to the root's tree — arbitrary container
+    sessions are not addressable through this endpoint."""
+    tree = await _resolve_session_tree(session_id)
+    objects: Dict[str, Any] = tree["objects"]
+
+    # Transitive closure over parentID (dict order is not guaranteed to be
+    # parent-before-child), plus the guardrail judge session(s).
+    allowed = {session_id}
+    changed = True
+    while changed:
+        changed = False
+        for sid, obj in objects.items():
+            if sid in allowed:
+                continue
+            if obj.get("parentID") in allowed or (
+                str(obj.get("title") or "").lower().startswith("guardrail")
+            ):
+                allowed.add(sid)
+                changed = True
+    if agent_session_id not in allowed:
+        raise HTTPException(status_code=404, detail="Agent session is not part of this session's run")
+
+    result = await get_session_messages_async(
+        session_id=agent_session_id,
+        host=tree["host_addr"],
+        port=4096
+    )
+    if not result.get("success"):
+        if "not found" in str(result.get("error", "")).lower():
+            return []
+        raise HTTPException(status_code=500, detail=f"Failed to get messages: {result.get('error')}")
+
+    return [_transform_opencode_message(m) for m in result.get("messages", [])][offset:offset + limit]
 
 @router.post("/{session_id}/prompt", response_model=PromptResponse)
 async def send_prompt(
