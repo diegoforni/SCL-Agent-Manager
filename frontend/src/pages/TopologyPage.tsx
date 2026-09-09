@@ -2,9 +2,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ChevronDown, ChevronRight, Server, Network as NetworkIcon,
-  Plus, X, Save, Play, Square, CheckCircle, AlertCircle, Loader2
+  Plus, X, Save, Play, Square, CheckCircle, AlertCircle, Loader2, Sparkles
 } from 'lucide-react';
-import api from '@/api';
+import api, { type PresetSummary } from '@/api';
 import type { Topology, Network, Host, AgentTemplate } from '@/types';
 
 // ─── Agent catalogue ────────────────────────────────────────────────────────
@@ -256,6 +256,17 @@ export function TopologyPage() {
 
   useEffect(() => { loadList(); }, [loadList]);
 
+  // Starter presets — the plugin's presets/ catalogue (what a fresh clone ships).
+  // Loaded once, best-effort: the topology list works without them.
+  const [presets, setPresets] = useState<PresetSummary[]>([]);
+  const [instantiating, setInstantiating] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.getPresets()
+      .then((data) => setPresets(data.presets ?? []))
+      .catch(() => setPresets([]));
+  }, []);
+
   // Load the authoritative list of available agents from the backend.
   const loadAgentTemplates = useCallback(() => {
     api.getAgentTemplates()
@@ -362,6 +373,24 @@ export function TopologyPage() {
       showToast(`Created topology “${created.name}”`);
     } catch (e) {
       showToast('Failed to create topology', false);
+    }
+  };
+
+  // ── Instantiate a starter preset ──────────────────────────────────────────
+  // One click → editable draft copy of the preset; the plugin mints a fresh
+  // id so repeated instantiations never collide.
+  const doInstantiatePreset = async (preset: PresetSummary) => {
+    if (instantiating) return;
+    setInstantiating(preset.preset_id);
+    try {
+      const created = await api.instantiatePreset(preset.preset_id);
+      await loadList();
+      await selectTopology(created.id);
+      showToast(`Instantiated “${created.name}”`);
+    } catch (e: any) {
+      showToast(e?.message ?? 'Failed to instantiate preset', false);
+    } finally {
+      setInstantiating(null);
     }
   };
 
@@ -508,6 +537,50 @@ export function TopologyPage() {
               <p className="text-xs font-medium mt-1 text-gray-400 dark:text-gray-500">{s.is_running ? '● running' : '○ stopped'}</p>
             </button>
           ))}
+
+          {/* ── Starter presets (plugin presets/ catalogue) ── */}
+          {presets.length > 0 && (
+            <>
+              <div className="flex items-center gap-1.5 flex-shrink-0 pt-3 mt-1 border-t border-gray-200 dark:border-gray-700">
+                <Sparkles size={13} className="text-amber-500" />
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Starter presets</h2>
+              </div>
+              {presets.map(p => (
+                <div
+                  key={p.preset_id}
+                  className="p-3.5 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="font-semibold text-sm truncate" title={p.preset_name}>{p.preset_name}</h3>
+                    <button
+                      onClick={() => doInstantiatePreset(p)}
+                      disabled={instantiating !== null}
+                      title={`Create a new editable topology from the ${p.preset_name} preset`}
+                      className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-medium transition-colors flex-shrink-0"
+                    >
+                      {instantiating === p.preset_id
+                        ? <Loader2 size={12} className="animate-spin" />
+                        : <Plus size={12} />}
+                      {instantiating === p.preset_id ? 'Creating…' : 'Instantiate'}
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    {p.network_count} network{p.network_count !== 1 ? 's' : ''} · {p.host_count} host{p.host_count !== 1 ? 's' : ''}
+                  </p>
+                  {p.description && (
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-1 line-clamp-3" title={p.description}>{p.description}</p>
+                  )}
+                  {p.tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {p.tags.map(t => (
+                        <span key={t} className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 text-[10px] font-medium">{t}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </>
+          )}
         </div>
 
         {/* ── Right: detail + editor ── */}

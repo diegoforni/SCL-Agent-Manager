@@ -263,6 +263,45 @@ export async function createTopology(payload: { name: string; networks: Network[
 }
 
 // =============================================================================
+// Starter Preset APIs (plugin presets/ catalogue)
+// =============================================================================
+
+/**
+ * Starter topology preset shipped in the plugin's presets/ directory.
+ * A fresh clone of the plugin starts with exactly these and no saved
+ * topologies — they are the repo's out-of-the-box lab starters.
+ */
+export interface PresetSummary {
+  preset_id: string;
+  preset_name: string;
+  description: string;
+  tags: string[];
+  network_count: number;
+  host_count: number;
+}
+
+/**
+ * List the starter topology presets.
+ */
+export async function getPresets(): Promise<{ presets: PresetSummary[] }> {
+  const response = await apiClient.get<{ presets: PresetSummary[] }>('/api/presets');
+  return response.data;
+}
+
+/**
+ * Materialize a starter preset into a new draft topology. The plugin mints a
+ * fresh slug-based id per instantiation, so repeats never collide. Returns the
+ * newly created topology (same shape as createTopology).
+ */
+export async function instantiatePreset(
+  presetId: string,
+  opts?: { new_id?: string; name?: string },
+): Promise<Topology> {
+  const response = await apiClient.post<Topology>(`/api/presets/${presetId}/instantiate`, opts ?? {});
+  return response.data;
+}
+
+// =============================================================================
 // Agent Management APIs
 // =============================================================================
 
@@ -1003,6 +1042,10 @@ export default {
   setCoder56Verifier,
   createTopology,
   getTopologyJob,
+
+  // Starter Presets
+  getPresets,
+  instantiatePreset,
 
   // Agent Management
   getAgentTemplates,

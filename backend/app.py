@@ -343,7 +343,7 @@ app.add_middleware(
 # Include Routers
 # =============================================================================
 
-from .routers import agents, containers, sessions, reconciliation, topologies, opencode_compat, timeline_compat, replay, settings, coder56
+from .routers import agents, containers, sessions, reconciliation, topologies, opencode_compat, timeline_compat, replay, settings, coder56, presets
 
 # Routers already have prefixes defined, include without additional prefixes
 app.include_router(agents.router)
@@ -351,6 +351,8 @@ app.include_router(containers.router)
 app.include_router(sessions.router)
 app.include_router(reconciliation.router)
 app.include_router(topologies.router)
+# Starter topology presets (plugin presets/ catalogue → instantiate)
+app.include_router(presets.router)
 # Add OpenCode compatibility router for Trident-style file-backed state
 app.include_router(opencode_compat.router)
 # Add Timeline compatibility router for Trident-style agent timeline data
