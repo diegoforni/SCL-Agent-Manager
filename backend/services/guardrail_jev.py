@@ -386,6 +386,9 @@ def _parse_decision(data: dict[str, Any]) -> tuple[JevDecision, dict[str, Any]]:
         "category_choice": category,
         "category_confidence": cat.get("confidence"),
         "category_probabilities": cat.get("probabilities"),
+        # Full answer set (question overrides may add extra questions whose
+        # probabilities callers want — e.g. score fusion in the benchmark).
+        "answers": answers,
     }
     return decision, raw
 
