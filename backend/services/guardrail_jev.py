@@ -98,11 +98,16 @@ ThreatCategory = Literal["prompt_injection", "data_exfiltration", "benign", "amb
 
 
 class JevDecision(BaseModel):
-    """Spec-shaped decision routed on by execution graphs."""
+    """Spec-shaped decision routed on by execution graphs.
+
+    threat_category is a free string: the deployed question set uses the
+    ThreatCategory enum, but question overrides may define their own
+    classification, so validation happens against the caller's criteria
+    (report-only), not a fixed enum here."""
 
     is_malicious: bool
     confidence_score: float = Field(ge=0.0, le=1.0)
-    threat_category: ThreatCategory
+    threat_category: str
 
 
 class JevGuardrailError(RuntimeError):
@@ -207,18 +212,36 @@ def _build_headers(api_key: str, referer: str, title: str) -> dict[str, str]:
 
 
 def _build_request_body(model: str, payload_text: str,
-                        session_id: Optional[str] = None) -> dict[str, Any]:
+                        session_id: Optional[str] = None,
+                        questions: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Stateless decisions call: the payload IS the state; the predefined
     question structure keeps the output typed (Jev's equivalent of a strict
-    response_format — it cannot hallucinate outside the criteria keys)."""
+    response_format — it cannot hallucinate outside the criteria keys).
+
+    `questions` overrides the deployed question set (benchmark/prompt
+    iteration from the harness): must keep the two contract keys
+    (is_malicious: noul, threat_category: choice) so parsing holds."""
     body: dict[str, Any] = {
         "model": model,
         "state": payload_text,
-        "questions": QUESTIONS,
+        "questions": questions if questions is not None else QUESTIONS,
     }
     if session_id:
         body["session_id"] = session_id[:256]
     return body
+
+
+def _validate_question_override(questions: Any) -> dict[str, Any]:
+    """Minimal shape check so a bad override fails fast with a clear error
+    (both contract keys present with the right discriminator types)."""
+    if not isinstance(questions, dict):
+        raise JevGuardrailError("questions override must be an object", status_code=400)
+    mal, cat = questions.get("is_malicious"), questions.get("threat_category")
+    if not isinstance(mal, dict) or mal.get("type") != "noul":
+        raise JevGuardrailError("questions.is_malicious must be a noul question", status_code=400)
+    if not isinstance(cat, dict) or cat.get("type") != "choice":
+        raise JevGuardrailError("questions.threat_category must be a choice question", status_code=400)
+    return questions
 
 
 # ── Routing (pure) ────────────────────────────────────────────────────
@@ -339,6 +362,8 @@ def _parse_decision(data: dict[str, Any]) -> tuple[JevDecision, dict[str, Any]]:
     confidence_score = P(classification): noul when classified malicious,
     1-noul when benign (the choice answer's own confidence/distribution are
     kept in the raw section — they measure the category, not maliciousness).
+    The category is REPORT-ONLY: with question overrides the choice enum is
+    caller-defined, so any key of the override's own criteria is accepted.
     """
     answers = data.get("answers") or {}
     mal = answers.get("is_malicious") or {}
@@ -350,8 +375,6 @@ def _parse_decision(data: dict[str, Any]) -> tuple[JevDecision, dict[str, Any]]:
     if not 0.0 <= noul <= 1.0:
         raise JevGuardrailError(f"Jev returned out-of-range noul {noul}")
     category = str(cat["choice"])
-    if category not in THREAT_CATEGORIES:
-        raise JevGuardrailError(f"Jev returned unknown threat_category {category!r}")
     is_malicious = noul >= 0.5
     decision = JevDecision(
         is_malicious=is_malicious,
@@ -373,21 +396,29 @@ async def evaluate_payload(
     source: Optional[str] = None,
     run_id: Optional[str] = None,
     agent_id: Optional[str] = None,
+    questions: Optional[dict[str, Any]] = None,
+    variant: Optional[str] = None,
 ) -> dict[str, Any]:
     """Classify one payload via Jev and return the routed decision.
 
-    Raises JevGuardrailError (503 missing key / 502 API or parse failure);
-    the router converts those into fail-safe review/escalate responses.
+    `questions` (validated by _validate_question_override) replaces the
+    deployed question set for benchmark/prompt iteration; `variant` is a
+    caller tag recorded in telemetry. Raises JevGuardrailError (503 missing
+    key / 502 API or parse failure / 400 bad override); the router converts
+    those into fail-safe review/escalate responses.
     """
     api_key = _resolve_api_key()
     if not api_key:
         raise JevGuardrailError(
             "OPENROUTER_API_KEY not configured (set it in .env / compose "
             "environment or the Settings UI)", status_code=503)
+    if questions is not None:
+        _validate_question_override(questions)
 
     cfg = get_effective_config()
     headers = _build_headers(api_key, cfg["referer"], cfg["title"])
-    body = _build_request_body(cfg["model"], payload_text, session_id=run_id)
+    body = _build_request_body(cfg["model"], payload_text, session_id=run_id,
+                               questions=questions)
 
     started = time.monotonic()
     usage: dict[str, Any] = {}
@@ -415,6 +446,7 @@ async def evaluate_payload(
         _append_eval_log({
             "ts": datetime.now(timezone.utc).isoformat(),
             "source": source, "run_id": run_id, "agent_id": agent_id,
+            "variant": variant,
             "decision": decision.model_dump() if decision else None,
             "raw": raw or None,
             "action": action, "platform_decision": platform_decision,

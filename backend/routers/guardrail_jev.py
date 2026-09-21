@@ -33,7 +33,9 @@ router = APIRouter(prefix="/api/guardrail/jev", tags=["guardrail-jev"])
 class JevEvaluateRequest(BaseModel):
     """One payload to classify. payload_text / prompt / trace are aliases —
     the first non-empty one wins (traces and prompts flow through the same
-    stateless Jev call)."""
+    stateless Jev call). `questions` (benchmark iteration) replaces the
+    deployed question set — must keep the is_malicious(noul) +
+    threat_category(choice) contract keys; `variant` tags telemetry."""
 
     payload_text: Optional[str] = Field(default=None, min_length=1, max_length=200_000)
     prompt: Optional[str] = Field(default=None, min_length=1, max_length=200_000)
@@ -41,6 +43,8 @@ class JevEvaluateRequest(BaseModel):
     source: Optional[str] = Field(default=None, max_length=200)
     run_id: Optional[str] = Field(default=None, max_length=200)
     agent_id: Optional[str] = Field(default=None, max_length=200)
+    questions: Optional[dict] = Field(default=None)
+    variant: Optional[str] = Field(default=None, max_length=100)
 
     @model_validator(mode="before")
     @classmethod
@@ -64,7 +68,8 @@ async def evaluate(req: JevEvaluateRequest) -> JSONResponse:
     try:
         result = await evaluate_payload(
             req.payload(),
-            source=req.source, run_id=req.run_id, agent_id=req.agent_id)
+            source=req.source, run_id=req.run_id, agent_id=req.agent_id,
+            questions=req.questions, variant=req.variant)
         return JSONResponse(result, status_code=200)
     except JevGuardrailError as exc:
         # Fail-safe: route to human review, never allow through on error.

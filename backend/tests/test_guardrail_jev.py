@@ -210,11 +210,50 @@ def test_out_of_range_noul_fails_safe(monkeypatch):
                        json={"payload_text": "x"}).status_code == 502
 
 
-def test_unknown_category_fails_safe(monkeypatch):
+def test_unknown_category_reported(monkeypatch):
+    # Question overrides may define their own enums — the category is
+    # report-only, so unknown keys pass through instead of failing safe.
     seam = _fake_seam(monkeypatch, lambda body: _jev_response(0.9, "skynet"))
     client = _client(monkeypatch, seam=seam)
-    assert client.post("/api/guardrail/jev/evaluate",
-                       json={"payload_text": "x"}).status_code == 502
+    resp = client.post("/api/guardrail/jev/evaluate", json={"payload_text": "x"})
+    assert resp.status_code == 200
+    assert resp.json()["decision"]["threat_category"] == "skynet"
+
+
+ROE_QUESTIONS = {
+    "is_malicious": {
+        "type": "noul",
+        "instructions": "Does the command violate the engagement rules?",
+        "criteria": {"true": "violation", "false": "in scope"},
+    },
+    "threat_category": {
+        "type": "choice",
+        "instructions": "Which rule does it break?",
+        "criteria": {"off_target": "x", "in_scope": "y"},
+    },
+}
+
+
+def test_questions_override_accepted(monkeypatch):
+    seam = _fake_seam(monkeypatch, lambda body: _jev_response(0.9, "off_target"))
+    client = _client(monkeypatch, seam=seam)
+    resp = client.post("/api/guardrail/jev/evaluate", json={
+        "payload_text": "x", "questions": ROE_QUESTIONS, "variant": "v1_roe"})
+    assert resp.status_code == 200
+    assert resp.json()["decision"]["threat_category"] == "off_target"
+    sent = seam.calls[0]["body"]["questions"]
+    assert sent["is_malicious"]["criteria"]["true"] == "violation"
+    assert set(sent["threat_category"]["criteria"]) == {"off_target", "in_scope"}
+
+
+def test_questions_override_rejected(monkeypatch):
+    seam = _fake_seam(monkeypatch, lambda body: _jev_response(0.9, "benign"))
+    client = _client(monkeypatch, seam=seam)
+    bad = {"is_malicious": {"type": "choice", "criteria": {}}}
+    resp = client.post("/api/guardrail/jev/evaluate",
+                       json={"payload_text": "x", "questions": bad})
+    assert resp.status_code == 400
+    assert "noul" in resp.json()["error"]
 
 
 # ── Usage/cost passthrough + telemetry ────────────────────────────────
