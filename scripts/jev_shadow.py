@@ -69,11 +69,15 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("run_id")
     ap.add_argument("--api", default="http://127.0.0.1:9005/api/guardrail/jev/evaluate")
+    ap.add_argument("--out", default=None,
+                    help="Shadow ndjson path (default: OUTPUTS_DIR/<run_id>/jev_shadow.ndjson; "
+                         "run dirs are root-owned when created by the dashboard container, so "
+                         "host-side runs typically pass OUTPUTS_DIR/jev_shadow/<run_id>.ndjson)")
     args = ap.parse_args()
 
     outputs = Path(os.environ.get("OUTPUTS_DIR", DEFAULT_OUTPUTS))
     verdicts_path = outputs / args.run_id / "guardrail" / "verdicts.ndjson"
-    shadow_path = outputs / args.run_id / "jev_shadow.ndjson"
+    shadow_path = Path(args.out) if args.out else outputs / args.run_id / "jev_shadow.ndjson"
 
     print(f"[jev-shadow] run={args.run_id} verdicts={verdicts_path} api={args.api}", flush=True)
     offset = 0
