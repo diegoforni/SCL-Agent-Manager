@@ -29,6 +29,16 @@ services:
       - OPENCODE_API_KEY=${OPENCODE_API_KEY}
       - DEFENDER_LLM_API_KEY=${OPENCODE_API_KEY}
       - PLANNER_MODEL=${PLANNER_MODEL:-gpt-oss-120b}
+      # Jev inline guardrail (orchestration-level prompt-injection classifier)
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - JEV_BASE_URL=${JEV_BASE_URL:-https://openrouter.ai/api/v1}
+      - JEV_MODEL=${JEV_MODEL:-typesafe/jev-1.13}
+      - JEV_ENDPOINT_ID=${JEV_ENDPOINT_ID:-2db56e7f-853c-44db-9dff-3eaacfa59122}
+      - JEV_BLOCK_THRESHOLD=${JEV_BLOCK_THRESHOLD:-0.90}
+      - JEV_REVIEW_THRESHOLD=${JEV_REVIEW_THRESHOLD:-0.60}
+      - JEV_TIMEOUT_S=${JEV_TIMEOUT_S:-30}
+      - JEV_MAX_ATTEMPTS=${JEV_MAX_ATTEMPTS:-3}
+      - JEV_EVAL_LOG_ENABLED=${JEV_EVAL_LOG_ENABLED:-true}
     networks:
       - playground-net
     restart: unless-stopped

@@ -55,6 +55,14 @@ VARIABLE_SCHEMA: list[dict[str, Any]] = [
         "placeholder": "gpt-4o",
         "description": "Model identifier to use for all OpenCode agents.",
     },
+    {
+        "key": "OPENROUTER_API_KEY",
+        "label": "OpenRouter API Key",
+        "group": "guardrails",
+        "type": "password",
+        "required": False,
+        "description": "Key for the Jev inline prompt-injection guardrail (openrouter.ai).",
+    },
 ]
 
 GROUPS = [
@@ -62,6 +70,11 @@ GROUPS = [
         "id": "provider",
         "title": "LLM Provider",
         "description": "Configure the LLM provider credentials used by OpenCode agents.",
+    },
+    {
+        "id": "guardrails",
+        "title": "Guardrails",
+        "description": "Inline Jev prompt-injection classifier (OpenRouter).",
     },
 ]
 
