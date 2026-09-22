@@ -343,7 +343,7 @@ app.add_middleware(
 # Include Routers
 # =============================================================================
 
-from .routers import agents, containers, sessions, reconciliation, topologies, opencode_compat, timeline_compat, replay, settings, coder56, presets, guardrail_jev
+from .routers import agents, containers, sessions, reconciliation, topologies, opencode_compat, timeline_compat, replay, settings, coder56, presets, guardrail_jev, guardrail_semif
 
 # Routers already have prefixes defined, include without additional prefixes
 app.include_router(agents.router)
@@ -365,6 +365,8 @@ app.include_router(settings.router)
 app.include_router(coder56.router)
 # Jev inline guardrail: orchestration-level prompt-injection classifier (OpenRouter)
 app.include_router(guardrail_jev.router)
+# SemIf inline guardrail: local open-source (Jev-pattern) prompt-injection classifier
+app.include_router(guardrail_semif.router)
 
 # Defender (soc_god) routers: alert ingest, enable/status, planner
 from .services.defender import defender_router, planner_router

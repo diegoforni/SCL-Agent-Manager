@@ -39,6 +39,21 @@ services:
       - JEV_TIMEOUT_S=${JEV_TIMEOUT_S:-30}
       - JEV_MAX_ATTEMPTS=${JEV_MAX_ATTEMPTS:-3}
       - JEV_EVAL_LOG_ENABLED=${JEV_EVAL_LOG_ENABLED:-true}
+      # SemIf inline guardrail (local open-source Jev-pattern scorer; no key).
+      # The CLI + GGUF must be visible to this container: bind-mount the venv
+      # and model, e.g. SEMIF_SCORE_CMD=/opt/semif/.venv/bin/semif-score with
+      #  - /opt/semif:/opt/semif:ro  added to this service's volumes.
+      - SEMIF_SCORE_CMD=${SEMIF_SCORE_CMD:-semif-score}
+      - SEMIF_BACKEND=${SEMIF_BACKEND:-llamacpp}
+      - SEMIF_MODEL=${SEMIF_MODEL:-Qwen/Qwen3.5-4B}
+      - SEMIF_REVISION=${SEMIF_REVISION:-851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a}
+      - SEMIF_GGUF=${SEMIF_GGUF:-}
+      - SEMIF_LLAMA_THREADS=${SEMIF_LLAMA_THREADS:-}
+      - SEMIF_MAX_TOKENS=${SEMIF_MAX_TOKENS:-4096}
+      - SEMIF_BLOCK_THRESHOLD=${SEMIF_BLOCK_THRESHOLD:-0.90}
+      - SEMIF_REVIEW_THRESHOLD=${SEMIF_REVIEW_THRESHOLD:-0.60}
+      - SEMIF_TIMEOUT_S=${SEMIF_TIMEOUT_S:-300}
+      - SEMIF_EVAL_LOG_ENABLED=${SEMIF_EVAL_LOG_ENABLED:-true}
     networks:
       - playground-net
     restart: unless-stopped

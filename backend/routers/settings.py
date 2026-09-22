@@ -74,7 +74,8 @@ GROUPS = [
     {
         "id": "guardrails",
         "title": "Guardrails",
-        "description": "Inline Jev prompt-injection classifier (OpenRouter).",
+        "description": "Inline prompt-injection classifiers: Jev (OpenRouter) "
+                       "and SemIf (local open-source, Jev-pattern).",
     },
 ]
 
