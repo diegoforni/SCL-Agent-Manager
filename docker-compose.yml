@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dashboard
+      network: host   # kilimanjaro: build containers have no bridge egress - build via host stack
     container_name: scl-agent-manager-dashboard
     ports:
       - "127.0.0.1:${DASHBOARD_PORT:-9005}:8080"
@@ -13,7 +14,7 @@ services:
       # Read-write: the agent-manager's auto_responder writes soc_god logs + alerts here.
       - ${OUTPUTS_DIR:-/tmp/outputs}:/outputs:rw
     environment:
-      - TOPOLOGY_PLUGIN_URL=http://scl-plugin-network-topology-control-plane:9002
+      - TOPOLOGY_PLUGIN_URL=http://scl-network-topology:9002
       - SCL_NETWORK_NAME=playground-net
       - AGENT_MANAGER_CONTAINER_NAME=scl-agent-manager-dashboard
       - OPENCODE_PORT=4096
@@ -40,7 +41,9 @@ services:
   # image/compose. Reached by containers on playground-net as
   # http://scl-nvidia-proxy:8448/v1 (see backend/routers/settings.py PROVIDER_PRESETS).
   nvidia-proxy:
-    build: ./nvidia-proxy
+    build:
+      context: ./nvidia-proxy
+      network: host   # kilimanjaro: Docker build bridge cannot reach registries
     image: scl-nvidia-proxy:0.1
     container_name: scl-nvidia-proxy
     hostname: scl-nvidia-proxy
