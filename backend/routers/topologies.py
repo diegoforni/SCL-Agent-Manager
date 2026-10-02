@@ -59,6 +59,12 @@ class NetworkHost(BaseModel):
     # Per-host coder56 verification mode. None/absent keeps the current default
     # (enabled); False restores direct single-agent finding validation.
     coder56_verifier_enabled: Optional[bool] = Field(default=None)
+    # Per-assignment prompt/goal overrides ({agent_type: {system_prompt, goal}}),
+    # consumed by the topology plugin at compose time (prepended to the baked
+    # agent prompt; goal appended). Declared here so the GET detail response
+    # round-trips it — without this field the dashboard's GET -> PUT save path
+    # silently deleted hand-set or benign-wizard agent_config values.
+    agent_config: Optional[Dict[str, Any]] = Field(default=None)
     generate_data: bool = False
     data_prompt: Optional[str] = None
     data_content: Optional[str] = None

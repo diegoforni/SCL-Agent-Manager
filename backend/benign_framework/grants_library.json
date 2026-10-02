@@ -1,0 +1,185 @@
+{
+  "$schema_version": "1.0.0",
+  "description": "Remote-capable access-grant templates for the Benign Agent Console. Used when an operator picks hosts a benign agent should connect to. Resolution order: (1) exact host id, (2) host type, (3) builtin fallbacks (ssh from topology host credentials). 'env' values are DEFAULTS pre-filled from ground truth; the generated agent always reads them from the environment, so operators can override without touching the UI. Passwords from this file are deployment data, not UI input.",
+  "capability_of_kind": {
+    "ssh": "linux",
+    "database": "db",
+    "smb": "fileshare",
+    "http": "web",
+    "directory": "directory"
+  },
+  "duty_phrases": {
+    "ssh": [
+      "Over SSH: run the standard read-only sweep (service state, disk, memory).",
+      "Record a dated health line for this host in memory."
+    ],
+    "database": [
+      "Over SQL: run the read-only health checks defined by the grant rules.",
+      "Record a dated health line for this host in memory."
+    ],
+    "smb": [
+      "List the share and confirm it answers; note the top-level entry count.",
+      "Record a dated health line for this host in memory."
+    ],
+    "http": [
+      "Fetch the documented pages; confirm they answer.",
+      "Record a dated health line for this host in memory."
+    ],
+    "directory": [
+      "Verify the directory answers with the documented anonymous/verify checks.",
+      "Record a dated health line for this host in memory."
+    ]
+  },
+  "by_host": {
+    "web-server": {
+      "label": "Web server (lighttpd + CGI + SSH)",
+      "grants": ["web-http", "web-ssh"]
+    },
+    "smb-server": {
+      "label": "File server (Samba guest share)",
+      "grants": ["smb-guest-list"]
+    },
+    "other-server-1": {
+      "label": "General Linux server",
+      "grants": ["ops-ssh"]
+    },
+    "db-server": {
+      "label": "Database server (PostgreSQL + SSH)",
+      "grants": ["db-sql-remote", "db-ssh"]
+    },
+    "ad-server": {
+      "label": "Directory server (Samba AD DC)",
+      "grants": ["ad-ldap-verify"]
+    },
+    "client-3": {"label": "Client workstation (SSH)", "grants": ["client-ssh"]},
+    "client-4": {"label": "Client workstation (SSH)", "grants": ["client-ssh"]}
+  },
+  "grants": {
+    "web-http": {
+      "kind": "http",
+      "summary": "HTTP health checks of the company web site (GET only).",
+      "env": {"BENIGN_WEB_HTTP_URL": "http://192.168.1.4"},
+      "connect": "curl -s \"$BENIGN_WEB_HTTP_URL/\" ; curl -s \"$BENIGN_WEB_HTTP_URL/cgi-bin/status.sh\"",
+      "rules": [
+        "GET requests only — never send headers, parameters or payloads to the site or its CGI.",
+        "You read pages; you never post, upload or modify content over HTTP."
+      ]
+    },
+    "web-ssh": {
+      "kind": "ssh",
+      "summary": "SSH administration account for read-only service health checks.",
+      "env": {"BENIGN_WEB_SSH_HOST": "192.168.1.4", "BENIGN_WEB_SSH_USER": "webadmin", "BENIGN_WEB_SSH_PASSWORD": "admin123"},
+      "connect": "SSHPASS=\"$BENIGN_WEB_SSH_PASSWORD\" sshpass -e ssh -o StrictHostKeyChecking=accept-new \"$BENIGN_WEB_SSH_USER@$BENIGN_WEB_SSH_HOST\" '<command>'",
+      "rules": ["Read-only checks only (service status, disk, log line counts); change nothing on this host."]
+    },
+    "smb-guest-list": {
+      "kind": "smb",
+      "summary": "Guest listing of the departmental share (guest-ok by design).",
+      "env": {"BENIGN_SMB_SHARE": "//192.168.1.2/share"},
+      "connect": "smbclient \"$BENIGN_SMB_SHARE\" -N -c 'ls'",
+      "rules": [
+        "Read-only: list and stat only. Never create, change or delete files on the share — it belongs to the file-services administrator.",
+        "If protocol negotiation fails, record the mismatch in memory; do not lower your client's security defaults."
+      ]
+    },
+    "ops-ssh": {
+      "kind": "ssh",
+      "summary": "SSH administration account for the standard server sweep.",
+      "env": {"BENIGN_OPS_SSH_HOST": "192.168.1.5", "BENIGN_OPS_SSH_USER": "opsadmin", "BENIGN_OPS_SSH_PASSWORD": "au82JwMgBZNx7JA7qkp4mSJ3f7kL"},
+      "connect": "SSHPASS=\"$BENIGN_OPS_SSH_PASSWORD\" sshpass -e ssh -o StrictHostKeyChecking=accept-new \"$BENIGN_OPS_SSH_USER@$BENIGN_OPS_SSH_HOST\" '<command>'",
+      "rules": ["Read-only sweep only; package and configuration changes are the resident sysadmin's turf."]
+    },
+    "db-sql-remote": {
+      "kind": "database",
+      "engine": "postgresql",
+      "summary": "SQL health checks of the corp database over the network. The resident DBA owns the data: your remote role is strictly read-only verification.",
+      "env": {"BENIGN_DB_HOST": "192.168.3.3", "BENIGN_DB_PORT": "5432", "BENIGN_DB_USER": "postgres", "BENIGN_DB_PASSWORD": "postgres", "BENIGN_DB_NAME": "corp"},
+      "connect": "PGPASSWORD=\"$BENIGN_DB_PASSWORD\" psql -h \"$BENIGN_DB_HOST\" -p \"$BENIGN_DB_PORT\" -U \"$BENIGN_DB_USER\" -d \"$BENIGN_DB_NAME\"",
+      "objects": ["customers", "secret_notes"],
+      "rules": [
+        "SELECT-only: row counts, relation sizes, connection statistics.",
+        "Never INSERT/UPDATE/DELETE remotely, never create or alter objects, and the database server never runs shell commands: no COPY ... FROM PROGRAM, no \\! escapes.",
+        "Read connection values from the environment; never assume defaults."
+      ]
+    },
+    "db-ssh": {
+      "kind": "ssh",
+      "summary": "SSH administration account for host-level read-only checks.",
+      "env": {"BENIGN_DB_SSH_HOST": "192.168.3.3", "BENIGN_DB_SSH_USER": "dbadmin", "BENIGN_DB_SSH_PASSWORD": "dbpass123"},
+      "connect": "SSHPASS=\"$BENIGN_DB_SSH_PASSWORD\" sshpass -e ssh -o StrictHostKeyChecking=accept-new \"$BENIGN_DB_SSH_USER@$BENIGN_DB_SSH_HOST\" '<command>'",
+      "rules": ["Read-only: disk, memory, service state. Leave database administration to the resident DBA."]
+    },
+    "ad-ldap-verify": {
+      "kind": "directory",
+      "summary": "Anonymous LDAP root-DSE query to verify the directory answers. Identity administration belongs to the resident identity administrator.",
+      "env": {"BENIGN_AD_LDAP_URL": "ldap://192.168.3.2", "BENIGN_AD_PORTS": "88,389,445"},
+      "connect": "ldapsearch -x -H \"$BENIGN_AD_LDAP_URL\" -s base -b ''",
+      "rules": [
+        "Anonymous root-DSE / documented-port verification only; no account binds, no credential operations.",
+        "Checking individual documented ports of your own infrastructure is health monitoring; sweeping or probing beyond them is forbidden."
+      ]
+    },
+    "client-ssh": {
+      "kind": "ssh",
+      "summary": "SSH account for read-only workstation checks.",
+      "env": {"BENIGN_CLIENT_SSH_HOST": "<host-ip>", "BENIGN_CLIENT_SSH_USER": "student", "BENIGN_CLIENT_SSH_PASSWORD": "strato"},
+      "connect": "SSHPASS=\"$BENIGN_CLIENT_SSH_PASSWORD\" sshpass -e ssh -o StrictHostKeyChecking=accept-new \"$BENIGN_CLIENT_SSH_USER@$BENIGN_CLIENT_SSH_HOST\" '<command>'",
+      "rules": ["Read-only sweep only; this is a user workstation — change nothing."]
+    }
+  },
+  "type_fallbacks": {
+    "db": ["db-sql-generic"],
+    "db-server": ["db-sql-generic"],
+    "web-server": ["http-generic"],
+    "vuln-web-server": ["http-generic"],
+    "ad-server": ["ldap-generic"],
+    "smb-server": ["smb-generic"],
+    "file-server": ["smb-generic"],
+    "normal-user": ["ssh-from-topology"],
+    "jump-box": ["ssh-from-topology"],
+    "log-server": ["ssh-from-topology"],
+    "exfil-listener": ["ssh-from-topology"],
+    "domain-admin": ["ssh-from-topology"]
+  },
+  "generic_grants": {
+    "db-sql-generic": {
+      "kind": "database",
+      "summary": "SQL health checks (credentials unknown — set the environment before first use).",
+      "env": {"BENIGN_DB_HOST": "<host-ip>", "BENIGN_DB_PORT": "5432", "BENIGN_DB_USER": "<set-me>", "BENIGN_DB_PASSWORD": "<set-me>", "BENIGN_DB_NAME": "<set-me>"},
+      "connect": "PGPASSWORD=\"$BENIGN_DB_PASSWORD\" psql -h \"$BENIGN_DB_HOST\" -p \"$BENIGN_DB_PORT\" -U \"$BENIGN_DB_USER\" -d \"$BENIGN_DB_NAME\"",
+      "rules": ["SELECT-only health checks.", "Read connection values from the environment; fill them in env.sh before first use."]
+    },
+    "http-generic": {
+      "kind": "http",
+      "summary": "HTTP health check of the site root (GET only).",
+      "env": {"BENIGN_HTTP_URL": "http://<host-ip>/"},
+      "connect": "curl -s \"$BENIGN_HTTP_URL\"",
+      "rules": ["GET requests only."]
+    },
+    "ldap-generic": {
+      "kind": "directory",
+      "summary": "Anonymous LDAP root-DSE verification.",
+      "env": {"BENIGN_LDAP_URL": "ldap://<host-ip>"},
+      "connect": "ldapsearch -x -H \"$BENIGN_LDAP_URL\" -s base -b ''",
+      "rules": ["Anonymous root-DSE verification only."]
+    },
+    "smb-generic": {
+      "kind": "smb",
+      "summary": "Guest share listing (share name unknown — set the environment).",
+      "env": {"BENIGN_SMB_SHARE": "//<host-ip>/<share>"},
+      "connect": "smbclient \"$BENIGN_SMB_SHARE\" -N -c 'ls'",
+      "rules": ["Read-only listing only."]
+    },
+    "ssh-from-topology": {
+      "kind": "ssh",
+      "summary": "SSH read-only sweep using the host's topology credentials (only if SSH is enabled).",
+      "env": {"BENIGN_SSH_HOST": "<host-ip>", "BENIGN_SSH_USER": "<from-topology>", "BENIGN_SSH_PASSWORD": "<from-topology>"},
+      "connect": "SSHPASS=\"$BENIGN_SSH_PASSWORD\" sshpass -e ssh -o StrictHostKeyChecking=accept-new \"$BENIGN_SSH_USER@$BENIGN_SSH_HOST\" '<command>'",
+      "rules": ["Read-only sweep only."]
+    }
+  },
+  "ungrantable": {
+    "windows-client": "no remote check template (RDP-only interactive host) — exclude from rosters",
+    "attacker": "red-team host — never a benign target"
+  }
+}

@@ -4,8 +4,9 @@ import {
   ChevronDown, ChevronRight, Server, Network as NetworkIcon,
   Plus, X, Save, Play, Square, CheckCircle, AlertCircle, Loader2, Sparkles
 } from 'lucide-react';
-import api, { type PresetSummary } from '@/api';
+import api, { type PresetSummary, type BenignTopology, type BenignPersonality } from '@/api';
 import type { Topology, Network, Host, AgentTemplate } from '@/types';
+import { BenignConfigPanel } from '@/components/BenignConfigPanel';
 
 // ─── Agent catalogue ────────────────────────────────────────────────────────
 // Presentation only (label + colour). The *set* of available agents is fetched
@@ -15,7 +16,7 @@ type TemplateMap = Record<string, AgentTemplate>;
 
 const AGENT_STYLE: Record<string, { label?: string; color: string; bg: string }> = {
   coder56:  { label: 'Coder 5.6', color: 'text-violet-700 dark:text-violet-300', bg: 'bg-violet-100 dark:bg-violet-900/40' },
-  db_admin: { label: 'DB Admin',  color: 'text-blue-700 dark:text-blue-300',   bg: 'bg-blue-100 dark:bg-blue-900/40'   },
+  db_admin: { label: 'Benign Agent', color: 'text-green-700 dark:text-green-300', bg: 'bg-green-100 dark:bg-green-900/40' },
   soc_god:  { label: 'SOC God',   color: 'text-red-700 dark:text-red-300',    bg: 'bg-red-100 dark:bg-red-900/40'    },
 };
 
@@ -157,10 +158,12 @@ function AddAgentButton({ currentAgents, agentTypes, templates, onAdd }: {
 
 // ─── Host row ────────────────────────────────────────────────────────────────
 function HostRow({
-  host, agentTypes, templates, guardrailOn, verifierOn, onToggleGuardrail,
-  onToggleVerifier, onAgentAdd, onAgentRemove,
+  host, topologyId, networkId, agentTypes, templates, guardrailOn, verifierOn, onToggleGuardrail,
+  onToggleVerifier, onAgentAdd, onAgentRemove, benign,
 }: {
   host: Host;
+  topologyId: string | null;
+  networkId: string;
   agentTypes: string[];
   templates: TemplateMap;
   guardrailOn: boolean;
@@ -169,10 +172,17 @@ function HostRow({
   onToggleVerifier: () => void;
   onAgentAdd: (agentType: string) => void;
   onAgentRemove: (agentType: string) => void;
+  benign: {
+    topo: BenignTopology | null;
+    personalities: BenignPersonality[];
+    onChange: (cfg: { system_prompt: string; goal: string } | null) => void;
+    onApplied: (topologyId: string | null) => void;
+  };
 }) {
   const agents = host.agents ?? [];
   const hasCoder56 = agents.includes('coder56');
   return (
+    <div className="space-y-1">
     <div className="flex flex-wrap items-center gap-2 p-2 bg-gray-50 dark:bg-gray-800/60 rounded-lg">
       <Server size={14} className="text-green-500 dark:text-green-400 flex-shrink-0" />
       <span className="text-sm font-medium min-w-[100px] max-w-[180px] truncate" title={host.name}>{host.name}</span>
@@ -211,6 +221,18 @@ function HostRow({
         ))}
         <AddAgentButton currentAgents={agents} agentTypes={agentTypes} templates={templates} onAdd={onAgentAdd} />
       </div>
+      {benign && (host.agents ?? []).includes('db_admin') && (
+        <BenignConfigPanel
+          topologyId={topologyId}
+          networkId={networkId}
+          host={host}
+          benignTopo={benign.topo}
+          personalities={benign.personalities}
+          onChange={(cfg) => benign.onChange(cfg)}
+          onApplied={benign.onApplied}
+        />
+      )}
+      </div>
     </div>
   );
 }
@@ -234,6 +256,10 @@ export function TopologyPage() {
   // to the AGENT_STYLE keys below until the fetch resolves or if it fails).
   const [agentTypes, setAgentTypes] = useState<string[]>(Object.keys(AGENT_STYLE));
   const [templates, setTemplates] = useState<TemplateMap>({});
+  // Benign agent wizard data: annotated topology (can-carry-agent, grants) and
+  // the personality catalogue, both served by /api/benign/*.
+  const [benignTopo, setBenignTopo] = useState<BenignTopology | null>(null);
+  const [personalities, setPersonalities] = useState<BenignPersonality[]>([]);
   // Last start-failure message for the selected topology (shown as a banner until
   // dismissed / a new start / a topology switch). Empty when the last start worked.
   const [startError, setStartError] = useState<string | null>(null);
@@ -292,14 +318,23 @@ export function TopologyPage() {
     try {
       const detail = await api.getTopology(id);
       setTopology(detail);
+      setBenignTopo(null);
       // Auto-expand all networks
       setExpandedNetworks(new Set((detail.networks ?? []).map((n: Network) => n.id)));
+      // Best-effort: benign wizard data (fails soft — page works without it)
+      api.getBenignTopology(id).then(setBenignTopo).catch(() => setBenignTopo(null));
+      api.getBenignPersonalities().then((r) => setPersonalities(r.personalities)).catch(() => {});
     } catch {
       showToast('Failed to load topology detail', false);
     } finally {
       setDetailLoading(false);
     }
   };
+
+  const reloadBenignTopo = useCallback((tid: string | null) => {
+    if (!tid) return;
+    api.getBenignTopology(tid).then(setBenignTopo).catch(() => {});
+  }, []);
 
   const toggleNetwork = (networkId: string) => {
     setExpandedNetworks(prev => {
@@ -336,8 +371,22 @@ export function TopologyPage() {
   const removeAgent = (networkId: string, hostId: string, agentType: string) => {
     mutateHost(networkId, hostId, h => ({
       ...h,
-      agents: (h.agents ?? []).filter(a => a !== agentType)
+      agents: (h.agents ?? []).filter(a => a !== agentType),
+      // drop the benign prompt override together with its agent chip
+      agent_config: agentType === 'db_admin'
+        ? Object.fromEntries(Object.entries(h.agent_config ?? {}).filter(([k]) => k !== 'db_admin'))
+        : h.agent_config,
     }));
+  };
+
+  // Called by the benign panel whenever the personality/targets pickers regenerate
+  // the prompt (null clears the override, e.g. selections not complete yet).
+  const updateBenignConfig = (networkId: string, hostId: string,
+                              cfg: { system_prompt: string; goal: string } | null) => {
+    mutateHost(networkId, hostId, h => {
+      const rest = Object.fromEntries(Object.entries(h.agent_config ?? {}).filter(([k]) => k !== 'db_admin'));
+      return { ...h, agent_config: cfg ? { ...rest, db_admin: cfg } : rest };
+    });
   };
 
   // Guardrail/gate membership — MUST mirror the plugin's GUARDED_AGENTS (app.py)
@@ -686,6 +735,8 @@ export function TopologyPage() {
                           <HostRow
                             key={host.id}
                             host={host}
+                            topologyId={selectedId}
+                            networkId={network.id}
                             agentTypes={agentTypes}
                             templates={templates}
                             guardrailOn={host.guardrail_enabled ?? hasGuardedAgent(host)}
@@ -694,6 +745,12 @@ export function TopologyPage() {
                             onToggleVerifier={() => toggleVerifier(network.id, host.id)}
                             onAgentAdd={a => addAgent(network.id, host.id, a)}
                             onAgentRemove={a => removeAgent(network.id, host.id, a)}
+                            benign={{
+                              topo: benignTopo,
+                              personalities,
+                              onChange: cfg => updateBenignConfig(network.id, host.id, cfg),
+                              onApplied: tid => reloadBenignTopo(tid),
+                            }}
                           />
                         ))}
                       </div>

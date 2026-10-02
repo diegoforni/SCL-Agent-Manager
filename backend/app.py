@@ -343,7 +343,7 @@ app.add_middleware(
 # Include Routers
 # =============================================================================
 
-from .routers import agents, containers, sessions, reconciliation, topologies, opencode_compat, timeline_compat, replay, settings, coder56, presets
+from .routers import agents, containers, sessions, reconciliation, topologies, opencode_compat, timeline_compat, replay, settings, coder56, presets, benign
 
 # Routers already have prefixes defined, include without additional prefixes
 app.include_router(agents.router)
@@ -363,6 +363,9 @@ app.include_router(replay.router)
 app.include_router(settings.router)
 # Coder56 Pentest Console: HITL guardrail + goal builder (standalone frontend)
 app.include_router(coder56.router)
+
+# Benign agents: personality x host/roster -> full prompt + topology patch
+app.include_router(benign.router)
 
 # Defender (soc_god) routers: alert ingest, enable/status, planner
 from .services.defender import defender_router, planner_router

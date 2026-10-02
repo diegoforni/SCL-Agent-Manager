@@ -620,6 +620,10 @@ export interface Host {
   username?: string;
   password?: string;
   agents?: string[];
+  /** Per-assignment prompt/goal overrides ({agent_type: {system_prompt, goal}}),
+   * consumed by the topology plugin at compose time. Round-trips through the
+   * topology detail API (NetworkHost declares the field). */
+  agent_config?: Record<string, { system_prompt: string; goal: string }>;
   /** Opt host into the guardrail/gate. undefined = auto (armed iff a
    * guarded agent — coder56/soc_god — is present on the host). */
   guardrail_enabled?: boolean;

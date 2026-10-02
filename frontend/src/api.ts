@@ -1027,6 +1027,96 @@ export type {
 };
 
 // =============================================================================
+// =============================================================================
+// Benign Agent APIs
+// =============================================================================
+
+export interface BenignPersonality {
+  id: string;
+  label: string;
+  name: string;
+  role_title: string;
+  shift: string;
+  multi_host: boolean;
+}
+
+export interface BenignHostInfo {
+  id: string;
+  type: string;
+  ip: string;
+  can_carry_agent: boolean;
+  agents: string[];
+  ssh_enabled: boolean;
+  known_grants: string[];
+  excluded_reason?: string | null;
+}
+
+export interface BenignTopology {
+  id: string;
+  name: string;
+  is_running: boolean;
+  networks: Array<{ id: string; name?: string; cidr: string; hosts: BenignHostInfo[] }>;
+}
+
+export interface BenignPreviewRequest {
+  topology_id: string;
+  personality_id: string;
+  mode: 'resident' | 'remote';
+  host_id: string;
+  operator?: string;
+  targets: string[];
+  allow_internet: boolean;
+}
+
+export interface BenignPreview {
+  topology_id: string;
+  personality_id: string;
+  mode: 'resident' | 'remote';
+  home: { host_id: string; network_id: string; ip: string; host_type: string; role_label: string };
+  roster: string[];
+  system_prompt: string;
+  goal: string;
+  env: Record<string, string>;
+  warnings: string[];
+  topology_patch: {
+    home: {
+      host_id: string;
+      network_id: string;
+      new_host: Record<string, unknown> | null;
+      system_prompt: string;
+      goal: string;
+    };
+    firewall_rules: string[];
+  };
+}
+
+export async function getBenignPersonalities(): Promise<{ personalities: BenignPersonality[] }> {
+  const response = await apiClient.get<{ personalities: BenignPersonality[] }>('/api/benign/personalities');
+  return response.data;
+}
+
+export async function getBenignTopology(topologyId: string): Promise<BenignTopology> {
+  const response = await apiClient.get<BenignTopology>(`/api/benign/topologies/${topologyId}`);
+  return response.data;
+}
+
+export async function previewBenignAgent(req: BenignPreviewRequest): Promise<BenignPreview> {
+  const response = await apiClient.post<BenignPreview>('/api/benign/preview', req);
+  return response.data;
+}
+
+export async function applyBenignAgent(
+  topologyId: string,
+  topologyPatch: BenignPreview['topology_patch'],
+  restart: boolean,
+): Promise<{ ok: boolean; changes: string[] }> {
+  const response = await apiClient.post<{ ok: boolean; changes: string[] }>(
+    '/api/benign/apply',
+    { topology_id: topologyId, topology_patch: topologyPatch, restart },
+  );
+  return response.data;
+}
+
 // API Client Instance (for direct use)
 // =============================================================================
 
@@ -1042,6 +1132,12 @@ export default {
   setCoder56Verifier,
   createTopology,
   getTopologyJob,
+
+  // Benign Agents
+  getBenignPersonalities,
+  getBenignTopology,
+  previewBenignAgent,
+  applyBenignAgent,
 
   // Starter Presets
   getPresets,
